@@ -13,7 +13,11 @@ description: >
   "Infrequent tier no results", "sumologic_default", "how do I scope to a
   partition", "query data tier", "infrequent vs continuous querying",
   "my search returns empty", "audit index query", "sec_record",
-  "security tier partition", "what is _index vs _view".
+  "security tier partition", "what is _index vs _view",
+  "sumologic_search_usage_per_query", "search audit view", "who ran
+  expensive searches", "search cost by user", "slow searches",
+  "data scanned per query", "search usage report", "compliance search
+  history", "scan cost by tier".
 ---
 
 ## Partition Types Overview
@@ -67,9 +71,8 @@ Full per-index query patterns, field tables, and gotchas:
 [`references/sumologic-audit.md`](references/sumologic-audit.md),
 [`references/sumologic-audit-events.md`](references/sumologic-audit-events.md),
 [`references/sumologic-system-events.md`](references/sumologic-system-events.md),
-[`references/sumologic-volume.md`](references/sumologic-volume.md).
-`sumologic_search_usage_per_query` is not covered here — outside this
-reference client's bundled skill set.
+[`references/sumologic-volume.md`](references/sumologic-volume.md),
+[`references/sumologic-search-usage.md`](references/sumologic-search-usage.md).
 
 ### Type 4 — Cloud SIEM security-tier partitions
 
