@@ -72,16 +72,29 @@ These sharp edges matter far more to an API/agent caller than to a human in the 
 
 Let's consider how steps 2–6 above map onto the API/MCP stages below. Step 1 (reusing saved content) is UI/Library-only for `sumo_search_client.py` and `sumosearch` — both are scoped to the Search Job API — but Sumo's own MCP investigator skill can reuse dashboards and alerts directly (see the table's last row); that's a Sumo-provided capability layered on MCP, not something this repo's client or CLI expose.
 
-| Stage | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP | Applicable skill(s) |
-| --- | --- | --- | --- | --- |
-| **Discover** data (partitions, source categories, scheduled views) | `list_partitions()`, `list_extraction_rules()`, `list_scheduled_views()` — synchronous, no job created | `sumosearch discover partitions\|fers\|views` | `listPartitions`, `listExtractionRules` | [`discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md), [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md), [`search-siem-investigation`](skills/search-siem-investigation/SKILL.md) |
-| **Schema discovery** (what fields does this query actually produce) | Manual — `list_extraction_rules()` plus hand-writing a raw sample yourself | First-class `sumosearch schema` command | Not exposed | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md) |
-| **Pre-flight cost check** (scan bytes before committing) | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools | [`query-scoping-efficiency`](skills/query-scoping-efficiency/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md) |
-| **Sample** a query on a small window | Manual — `run_search()` with `\| limit N` | `sumosearch sample` | Manual — `runLogSearch` with `\| limit N` | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`operator-ordering`](skills/operator-ordering/SKILL.md) |
-| **Write and Run** a search (create → poll → fetch → delete) | `run_search()` | `sumosearch search run` | `runLogSearch` | [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md), [`common-query-patterns`](skills/common-query-patterns/SKILL.md), [`ai-agent-result-shaping`](skills/ai-agent-result-shaping/SKILL.md) |
-| **Work with results** | Raw API JSON — bring your own formatting | Built-in csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |  |
-| **Investigation workflow discipline** (sample-before-run, first-line limits, `nodrop`) | Left to the caller — `skills/` documents it | Left to the caller — `skills/` documents it | Not enforced by the raw tools; Sumo's [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) layers a mandatory Discover (parallel `listPartitions`/`listCustomFields`/`listExtractionRules`) → 5-min/≤5-row Sample → Targeted Search workflow on top as agent policy | [`operator-ordering`](skills/operator-ordering/SKILL.md), [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md) |
-| **Insights, Detection Rules, Alerts, Dashboards** (SIEM triage & content reuse — not log search) | Out of scope — Search Job API only | Out of scope — Search Job API only | Native, via the [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill): `getInsights`, `getRules`, `alertsSearch`, `listDashboards`, `createDashboard`, etc. |  |
+| Stage | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP |
+| --- | --- | --- | --- |
+| **Discover** data (partitions, source categories, scheduled views) | `list_partitions()`, `list_extraction_rules()`, `list_scheduled_views()` — synchronous, no job created | `sumosearch discover partitions\|fers\|views` | `listPartitions`, `listExtractionRules` |
+| **Schema discovery** (what fields does this query actually produce) | Manual — `list_extraction_rules()` plus hand-writing a raw sample yourself | First-class `sumosearch schema` command | Not exposed |
+| **Pre-flight cost check** (scan bytes before committing) | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools |
+| **Sample** a query on a small window | Manual — `run_search()` with `\| limit N` | `sumosearch sample` | Manual — `runLogSearch` with `\| limit N` |
+| **Write and Run** a search (create → poll → fetch → delete) | `run_search()` | `sumosearch search run` | `runLogSearch` |
+| **Work with results** | Raw API JSON — bring your own formatting | Built-in csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |
+| **Investigation workflow discipline** (sample-before-run, first-line limits, `nodrop`) | Left to the caller — `skills/` documents it | Left to the caller — `skills/` documents it | Not enforced by the raw tools; Sumo's [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) layers a mandatory Discover (parallel `listPartitions`/`listCustomFields`/`listExtractionRules`) → 5-min/≤5-row Sample → Targeted Search workflow on top as agent policy |
+| **Insights, Detection Rules, Alerts, Dashboards** (SIEM triage & content reuse — not log search) | Out of scope — Search Job API only | Out of scope — Search Job API only | Native, via the [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill): `getInsights`, `getRules`, `alertsSearch`, `listDashboards`, `createDashboard`, etc. |
+
+The skills in this repo are written against that stage, not against any one of the three tools above — the same skill applies whether the caller is `sumo_search_client.py`, the `sumosearch` CLI, or Sumo's MCP tools, since all three eventually hit the same Search Job API sharp edges:
+
+| Stage | Skill(s) |
+| --- | --- |
+| **Discover** data | [`discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md), [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md), [`search-siem-investigation`](skills/search-siem-investigation/SKILL.md) |
+| **Schema discovery** | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md) |
+| **Pre-flight cost check** | [`query-scoping-efficiency`](skills/query-scoping-efficiency/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md) |
+| **Sample** a query | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`operator-ordering`](skills/operator-ordering/SKILL.md) |
+| **Write and Run** a search | [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md), [`common-query-patterns`](skills/common-query-patterns/SKILL.md), [`ai-agent-result-shaping`](skills/ai-agent-result-shaping/SKILL.md) |
+| **Work with results** | — |
+| **Investigation workflow discipline** | [`operator-ordering`](skills/operator-ordering/SKILL.md), [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md) |
+| **Insights, Detection Rules, Alerts, Dashboards** | — out of scope for this repo's skills; native to Sumo's MCP [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) |
 
 ## Why aggregate results are the best choice for token efficiency
 
