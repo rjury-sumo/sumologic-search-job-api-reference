@@ -11,10 +11,12 @@ Logic queries.
 **Engineers building agentic automation** on top of the Search Job API —
 `sumo_search_client.py` is a single-file, single-dependency (`requests`)
 Python client that gets the API's sharp edges right on the first pass:
-silent truncation at 100,000 raw messages, a 429 rate limit that's easy to
-ignore, and a `pendingErrors` field that a naive "did I get 0 results back"
-check will miss entirely, silently turning a broken query into a false
-"no results" report. Copy it into your own project and adapt it.
+silent truncation at 100,000 raw messages, a per-key rate limit (throttled
+client-side to the default 4 requests/second) backed by exponential
+backoff with jitter on 429s that honors a numeric `Retry-After` header,
+and a `pendingErrors` field that a naive "did I get 0 results back" check
+will miss entirely, silently turning a broken query into a false "no
+results" report. Copy it into your own project and adapt it.
 
 **End users, admins, and SIEM analysts** doing log discovery, query
 authoring, and search best-practice work — the `skills/` directory is
