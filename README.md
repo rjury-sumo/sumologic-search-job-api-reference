@@ -38,7 +38,13 @@ Start with [`skills/README.md`](skills/README.md) for the full skill index, what
 
 ### The log search journey
 
-Getting from "I have a problem to solve" to "a correctly scoped search — right syntax, right parsing, right field schema — for this specific use case" is rarely one step. In the search UI this plays out as a series of phases; a user who already knows part of the problem domain for their Sumo Logic instance can skip ahead to a later one, and over time saves content in the Library as a known-good starting point for next time:
+Getting from "I have a problem to solve" to "a correctly scoped search — right syntax, right parsing, right field schema — for this specific use case" is rarely one step.
+
+For Sumo Logic's new Mobot Log Analysis agent the agent interpets user intent, discovers log sources, writes multiple searches, reports back summarized reuslts and can suggest next steps. The flow is more 'ask a question' rather than 'write a log search'.
+
+In the traditional search UI flow this plays out as a series of phases with a UX experience built to enable flexible, fast, open ended log exploration as scale (either raw message or aggegates). Users must frame the problem and write a series of log searches.
+
+We can think of this log analysis journey for the user as a series of steps to go from question/prolem to log search(es). A user who already knows part of the problem domain for their Sumo Logic instance can skip ahead to a later one, and over time saves content in the Library as a known-good starting point for next time:
 
 1. **Reuse existing content.** Check Sumo Logic apps, dashboards, saved searches, and alerts for a solved (or close-relative) use case — this can fast-forward straight to field mapping or query crafting below. Advanced users pivot off data-volume/ingestion audit data to find matching metadata, or search the audit index for similar searches other users have already run.
    > **Output:** a reusable saved asset close to the current use case.
