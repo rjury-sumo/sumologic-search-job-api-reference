@@ -245,7 +245,8 @@ but returns a scan-size estimate instead of running the query.
   time range to confirm cost before actually running it wide.
 
 See `estimate_scan()` in `sumo_search_client.py` for the reference
-implementation, and Example 6 in `../../README.md` for usage.
+implementation, and the "Pre-flight scan-cost estimate" section of
+`../../docs/sumo-search-client-reference.md` for usage.
 
 ## Minimal Reference Implementation Shape
 

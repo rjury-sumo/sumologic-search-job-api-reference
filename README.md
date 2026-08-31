@@ -36,14 +36,23 @@ the full [`cli/README.md`](cli/README.md) reference.
 
 ### Positioning: three paths
 
-| Capability | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP (`runSearchJob`, `listPartitions`, `listFers`) |
+| | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP (`runSearchJob`, `listPartitions`, `listFers`) |
 | --- | --- | --- | --- |
 | Transport | Python library, embed in your own code | Subprocess, invoked via shell/bash tool | In-chat tool call, no subprocess |
 | Best for | Building a service/pipeline on top of the API | An agent (or human) driving ad hoc searches from a terminal/bash tool | An agent inside a harness with native MCP tool access |
-| Output shaping | None — raw API JSON, bring your own | Built-in: csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |
-| Schema/field discovery | Manual (`list_extraction_rules()` + hand-write a raw sample) | First-class `sumosearch schema` command | Not exposed |
-| Scan estimate / pre-flight cost check | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools |
 | Dependency footprint | `requests` only | `typer`, isolated to an opt-in `cli` dependency group | None (no install) |
+
+The log user journey, stage by stage:
+
+| Stage | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP |
+| --- | --- | --- | --- |
+| **Discover** data (partitions, source categories, scheduled views) | `list_partitions()`, `list_extraction_rules()`, `list_scheduled_views()` — synchronous, no job created | `sumosearch discover partitions\|fers\|views` | `listPartitions`, `listFers` |
+| **Schema discovery** (what fields does this query actually produce) | Manual — `list_extraction_rules()` plus hand-writing a raw sample yourself | First-class `sumosearch schema` command | Not exposed |
+| **Pre-flight cost check** (scan bytes before committing) | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools |
+| **Sample** a query on a small window | Manual — `run_search()` with `\| limit N` | `sumosearch sample` | Manual — `runSearchJob` with `\| limit N` |
+| **Run** a search (create → poll → fetch → delete) | `run_search()` | `sumosearch search run` | `runSearchJob` |
+| **Work with results** | Raw API JSON — bring your own formatting | Built-in csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |
+| **Bulk export** past the 100k-message cap | `estimate_count()` + `time_split_search()` | `sumosearch export` (auto time-splits) | Not in the three listed tools |
 
 The CLI doesn't replace either existing path — it's the missing third leg
 for the specific case of running a search or answering a discovery
@@ -53,7 +62,7 @@ unchanged across all three; only the transport/output layer differs. See
 for the full design rationale and empirical token-cost measurements behind
 these choices.
 
-## Quickstart
+## Quickstart: `sumo_search_client.py`
 
 ```bash
 pip install requests
@@ -91,6 +100,25 @@ Python 3.10+ (uses `X | None` union syntax and `dataclasses`). Auth is HTTP
 Basic — Access ID as username, Access Key as password. Never hardcode
 credentials; read them from the environment or a secrets manager.
 
+### Aggregate query (count by field)
+
+```python
+result = client.run_search(
+    query='_sourceCategory=prod/app | count by _sourceHost',
+    from_time="-6h",
+    to_time="now",
+    requires_raw_messages=False,   # skip raw-message overhead for aggregates
+)
+
+for row in result.items:
+    m = row["map"]
+    print(m["_sourcehost"], m["_count"])
+```
+
+The client auto-detects `records` vs. `messages` from the job's
+`recordCount`/`messageCount` — you never need to tell it which one your
+query produces.
+
 Region endpoints:
 
 | Region | Endpoint |
@@ -102,12 +130,28 @@ Region endpoints:
 
 ## Quickstart: the `sumosearch` CLI
 
+Install `sumosearch` as an isolated tool, on its own PATH entry, from the
+root of this repo:
+
+```bash
+uv tool install . --with typer     # installs the `sumosearch` command on your PATH
+
+# after pulling new commits, reinstall to pick up the changes:
+uv tool install . --with typer --force
+```
+
+`--with typer` is needed because `typer` lives in the opt-in `cli`
+dependency group, which `uv tool install` doesn't pull in on its own.
+
+Working inside a checkout of this repo instead (e.g. for development)?
+Use the project-local install shown in [`cli/README.md`](cli/README.md#install):
+
 ```bash
 uv sync --group cli
 ```
 
 Credentials come from the same environment variables as the Python client
-(see [Quickstart](#quickstart) above) — never as CLI flags, so they don't
+(see [Quickstart](#quickstart-sumo_search_clientpy) above) — never as CLI flags, so they don't
 end up in shell history.
 
 ```bash
@@ -131,8 +175,8 @@ controls (`--max-tokens`, `--drop-null-columns`, the stderr warning): see
 
 | File | Purpose |
 | --- | --- |
-| `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. |
-| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
+| `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. See [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for manual job control, configuration, and logging. |
+| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv tool install .` or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
 | `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. |
 | `tests/` | Unit tests (`test_sumo_search_client.py`, `test_cli.py`, no credentials needed) and a live-credential integration test. |
 | `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client and the CLI — not needed if you're just copying `sumo_search_client.py` into your own project. |
@@ -151,26 +195,7 @@ tool, the skills apply unchanged; only the transport differs.
 Start with [`skills/README.md`](skills/README.md) for the full skill index,
 what each one covers, and a suggested reading order for a new integration.
 
-## Example — Aggregate query (count by field)
-
-```python
-result = client.run_search(
-    query='_sourceCategory=prod/app | count by _sourceHost',
-    from_time="-6h",
-    to_time="now",
-    requires_raw_messages=False,   # skip raw-message overhead for aggregates
-)
-
-for row in result.items:
-    m = row["map"]
-    print(m["_sourcehost"], m["_count"])
-```
-
-The client auto-detects `records` vs. `messages` from the job's
-`recordCount`/`messageCount` — you never need to tell it which one your
-query produces.
-
-### Token efficiency: aggregate results vs. raw messages
+## Why aggregate results are the best choice for token efficiency
 
 If a result feeds an LLM/agent caller rather than a human dashboard, the
 query shape matters far more than any client-side formatting choice.
@@ -195,7 +220,7 @@ JSON-in-`_raw` application log — full methodology and numbers in
   unavoidable, trim fields **client-side after fetch**, not via an
   in-query `| fields`/`json auto` clause.
 
-Suggested approach:
+### Suggested approach
 
 1. Default to an aggregate query (`count by`, `sum()`, `avg()`, ...) with
    `requires_raw_messages=False` unless the caller genuinely needs
@@ -219,14 +244,6 @@ for the general query-shaping principles this analysis confirms, and
 for the full per-format token measurements and an agent-oriented CLI
 design built on these findings.
 
-### Gotcha: lookup-table reads have no `_raw`
-
-`cat /shared/lookups/<table> | where ...` (and similar lookup-table reads
-with no aggregate operator) hit the Messages endpoint like any raw query —
-but every row comes back with `_raw` empty and the real data under the
-table's own column names instead. Check `result.looks_like_lookup_table`
-before assuming `map["_raw"]` is populated.
-
 ### Handling errors correctly
 
 ```python
@@ -236,126 +253,33 @@ try:
     result = client.run_search(query='_sourceCateogry=typo-in-field-name | count',
                                from_time="-1h", to_time="now")
 except SumoSearchJobFailed as exc:
-    # Covers BOTH: pendingErrors reported by an invalid query, and jobs that
-    # ended in CANCELLED / FORCE PAUSED. This is the exception a naive
-    # "if not result.items: print('no results')" check would miss.
-    print(f"search failed: {exc}")
+    print(f"search failed: {exc}")   # covers pendingErrors AND CANCELLED/FORCE PAUSED jobs
 except SumoSearchTimeout as exc:
     print(f"search timed out: {exc}")
 except SumoSearchError as exc:
     print(f"search request error (HTTP {exc.status_code}): {exc}")
 ```
 
+A naive `if not result.items: print("no results")` check misses a broken
+query silently reported via `pendingErrors` — see the "State Machine"
+section of
+[`skills/search-job-api-best-practices/SKILL.md`](skills/search-job-api-best-practices/SKILL.md)
+for the full rationale and every other exception this client raises.
+
 ### Exporting more than 100,000 raw messages
 
-A single job silently truncates raw-message results at 100,000. For larger
-exports, probe the volume first and split the time range into windows sized
-to stay under the cap:
+A single job silently truncates raw-message results at 100,000; use
+`estimate_count()` + `time_split_search()` to probe volume and split the
+time range into windows that stay under the cap. See
+[`skills/search-job-api-best-practices/SKILL.md`](skills/search-job-api-best-practices/SKILL.md#large-exports-time-splitting)
+for the full pattern, and
+[`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md)
+for a runnable example against this client.
 
-```python
-from sumo_search_client import estimate_count, time_split_search
-
-query = '_sourceCategory=prod/app error'
-from_ms, to_ms = 1_700_000_000_000, 1_700_604_800_000   # ~7 days
-
-total = estimate_count(client, query, from_ms, to_ms)
-print(f"~{total} events in range")
-
-all_messages = time_split_search(
-    client, query, from_ms, to_ms, interval_hours=6,
-)
-print(f"fetched {len(all_messages)} messages across all windows")
-```
-
-### Pre-flight scan-cost estimate
-
-Before running an expensive or unfamiliar query, check what it will scan
-without creating a search job at all:
-
-```python
-import time
-
-to_ms = int(time.time() * 1000)
-from_ms = to_ms - 3_600_000   # last 1h; estimate_scan() needs epoch ms, not "-1h"
-
-estimate = client.estimate_scan(
-    query='_index=prod_logs _sourceCategory=prod/app error',
-    from_ms=from_ms, to_ms=to_ms,
-)
-print(f"{estimate.total_bytes / 1e9:.2f} GB across {len(estimate.partitions)} partition(s)")
-```
-
-### Discovery endpoints (partitions, field extraction rules, scheduled views)
-
-Three synchronous, no-job-created endpoints — useful before writing a query
-at all, when the source category or partition isn't known yet (see
-`skills/discovery-without-metadata/SKILL.md`):
-
-```python
-partitions = client.list_partitions()
-rules = client.list_extraction_rules()
-views = client.list_scheduled_views()
-```
-
-All three page through the API's `token`/`next` cursor internally and
-return the full list.
-
-### Manual control (create/poll/fetch separately)
-
-`run_search()` covers the common case. If you need to inspect the job
-between steps, use the lower-level methods directly:
-
-```python
-job = client.create_job(query, from_time="-1h", to_time="now")
-job_id = job["id"]
-
-try:
-    status = client.poll_until_done(job_id, timeout_s=300)
-    result = client.fetch_all(job_id, status, limit=5000)
-finally:
-    client.delete_job(job_id)   # always clean up, even on failure
-```
-
-## Configuration
-
-```python
-client = SumoSearchClient(
-    access_id, access_key, endpoint,
-    min_interval=0.25,      # 4 req/sec — the per-key API limit
-    max_retries=3,          # retries after an HTTP 429
-    base_backoff=5.0,       # seconds; doubles per retry attempt
-    max_backoff=60.0,       # seconds; backoff cap
-)
-```
-
-`run_search()` and `poll_until_done()` also accept `poll_timeout_s`
-(default 600s). Jobs expire roughly 10 minutes after creation, so raising
-this default rarely helps.
-
-## Logging
-
-The client uses the standard `logging` module under the logger name
-`sumo_search_client`:
-
-```python
-import logging
-logging.basicConfig(level=logging.DEBUG)
-```
-
-## What this client intentionally leaves out
-
-To stay a lightweight, portable reference:
-
-- No result caching, PII redaction, or output formatting — bring your own
-  for production use.
-- No adaptive (density-based) time-splitting — only fixed-interval; see
-  `skills/search-job-api-best-practices/SKILL.md` for the pattern if you
-  need it.
-- No cross-process rate coordination — the throttle lives in one client
-  instance. If multiple scripts or services share the same access key,
-  each one throttling independently still lets combined traffic exceed the
-  account's actual (shared) limits; see the shared-access-key note under
-  "Rate Limiting & Retry" in `skills/search-job-api-best-practices/SKILL.md`.
+For everything else specific to `sumo_search_client.py` — manual
+create/poll/fetch control, discovery-endpoint calls, constructor
+configuration (rate limits, retries, timeouts), and logging — see
+[`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md).
 
 ## Development & Testing
 
