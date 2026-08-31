@@ -21,6 +21,12 @@ cli = [
 [project.scripts]
 sumosearch = "cli.main:app"
 
+[tool.setuptools.packages.find]
+include = ["cli*"]
+
+[tool.setuptools]
+py-modules = ["sumo_search_client"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
@@ -33,4 +39,4 @@ target-version = "py310"
 select = ["E", "F", "I", "UP"]
 
 [tool.uv]
-package = false
+package = true

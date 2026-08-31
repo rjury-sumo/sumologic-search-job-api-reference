@@ -9,9 +9,16 @@ repo, internal CLI, or specific harness.
 ## Layout & invariants
 
 - `sumo_search_client.py` — single file, single dependency (`requests`).
-  Copy-paste distribution model, not `pip install`-as-library
-  (`tool.uv.package = false`). Don't split it into a package or add a
+  Copy-paste distribution model for consumers: they take this one file,
+  not `pip install` the repo. Don't split it into a package or add a
   `src/` layout.
+- `cli/` — the `sumosearch` agent-oriented CLI (see
+  `docs/dev/agent-cli-analysis-and-plan.md`). A separate installable
+  package that imports `sumo_search_client.py`; it's why
+  `tool.uv.package = true` (needed for the `sumosearch` console-script
+  entry point). This does not change the copy-paste distribution model
+  above — `sumo_search_client.py` still stands alone with zero `cli/`
+  dependency.
 - `tests/test_sumo_search_client.py` — unit tests, no credentials/network.
   Must always pass; this is what CI runs.
 - `tests/integration_test_sumo_search_client.py` — needs live
