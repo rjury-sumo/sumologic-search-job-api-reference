@@ -6,13 +6,29 @@ A standalone, customer-distributable reference for building log search and analy
 
 ## Who this is for
 
-**Engineers building agentic automation** on top of the Search Job API — `sumo_search_client.py` is a single-file, single-dependency (`requests`) Python client that gets the API's sharp edges right on the first pass: silent truncation at 100,000 raw messages, a per-key rate limit (throttled client-side to the default 4 requests/second) backed by exponential backoff with jitter on 429s that honors a numeric `Retry-After` header, and a `pendingErrors` field that a naive "did I get 0 results back" check will miss entirely, silently turning a broken query into a false "no results" report. Copy it into your own project and adapt it.
+**Engineers building agentic automation** on top of the Search Job API directly who need an API client that handles the 'sharp edges' to provide a simple api client experience, to run well scoped, effective and efficient log searches in Sumo Logic. — `sumo_search_client.py` is a single-file, single-dependency (`requests`) Python client that gets the API's sharp edges right on the first pass: one shot 'run a search job' endpoint that handles, 3 separate API calls and sync polling for completion, Messages (raw) and Records (aggregate) with smart defaults such as 'requiresRawMessages', a per-key rate limit (throttled client-side to the default 4 requests/second) backed by exponential backoff with jitter on 429s that honors a numeric `Retry-After` header, and a `pendingErrors` field that a naive "did I get 0 results back" check will miss entirely, silently turning a broken query into a false "no results" report. Copy it into your own project and adapt it.
 
 **End users, admins, and SIEM analysts** doing log discovery, query authoring, and search best-practice work — the `skills/` directory is portable [Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) content covering how to find the right data, scope a query efficiently, order pipeline operators, and shape results for an AI agent. These skills teach *how Sumo Logic search works*, not this specific client's API surface — they're equally useful driving queries through `sumo_search_client.py`, the `sumosearch` CLI, or Sumo's official `runLogSearch` MCP tool.
 
 **An agent (or human) driving ad hoc searches from a terminal/bash tool** — the `sumosearch` CLI in `cli/` is a third path, for callers that don't want to embed the Python client in a program and don't have MCP tool access. It's a small `kubectl`-style wrapper over the same endpoints, with token-efficient output shaping (csv/ndjson/json/table, aggregate-friendly defaults, client-side field trimming for raw messages) built in rather than left to the caller. See "Quickstart: the `sumosearch` CLI" below and the full [`cli/README.md`](cli/README.md) reference.
 
-### Positioning: three paths
+## Contents
+
+| File | Purpose |
+| --- | --- |
+| `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. See [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for manual job control, configuration, and logging. |
+| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv tool install .` or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
+| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. |
+| `tests/` | Unit tests (`test_sumo_search_client.py`, `test_cli.py`, no credentials needed) and a live-credential integration test. |
+| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client and the CLI — not needed if you're just copying `sumo_search_client.py` into your own project. |
+
+## Skills work with this client, the CLI, or Sumo's `runLogSearch` MCP tool
+
+The `skills/` directory is not tied to `sumo_search_client.py`. Each skill teaches query-authoring and search-methodology patterns — how to scope a query to keep scan cost down, how to discover which partition or source category holds the data you need, how to order pipeline operators, how to shape results for an LLM caller — that apply the same way regardless of how the query actually gets executed. Whether you're running queries through this client, the `sumosearch` CLI, or Sumo's official `runLogSearch` MCP tool, the skills apply unchanged; only the transport differs.
+
+Start with [`skills/README.md`](skills/README.md) for the full skill index, what each one covers, and a suggested reading order for a new integration.
+
+### Positioning: three paths for running Search Jobs
 
 | | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP (`runLogSearch`, `listPartitions`, `listExtractionRules`) |
 | --- | --- | --- | --- |
@@ -41,28 +57,42 @@ Getting from "I have a problem to solve" to "a correctly scoped search — right
 
 These sharp edges matter far more to an API/agent caller than to a human in the search UI — the UI absorbs most of them via presentation, result paging, and interactive discovery (query-assist autocomplete, field browser, clickable histograms) that the raw API simply doesn't have. Calling the Search Job API directly, or through an MCP tool, means owning these yourself:
 
-- **No discovery endpoint.** The API can't autocomplete metadata the way the UI does — see [`skills/discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md) and [`skills/discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), or this client's read-only `list_partitions()`/`list_extraction_rules()`/`list_scheduled_views()` calls.
-- **Per-key rate limits and 429s.** No UI-side queuing to fall back on — see [Engineers building agentic automation](#who-this-is-for) above for this client's built-in throttling and backoff.
-- **Silent 100k raw-message truncation.** A job just stops at 100,000 rows with no error — see ["Exporting more than 100,000 raw messages"](#exporting-more-than-100000-raw-messages).
-- **`pendingErrors` masquerading as empty results.** A broken query can report zero rows instead of failing — see ["Handling errors correctly"](#handling-errors-correctly).
-- **Unbounded result sets.** Nothing paginates for you the way the UI does — cap every raw query with a first-line `| limit N` and every aggregate with `| sort ... | limit N` / `| topk`, and use `nodrop` on `parse`/`json` field extraction so rows with a missing field don't silently disappear. See [`skills/operator-ordering`](skills/operator-ordering/SKILL.md) and [`skills/query-scoping-efficiency`](skills/query-scoping-efficiency/SKILL.md).
-- **Token/output cost.** Query shape (aggregate vs. raw) dominates response size well before any formatting choice — see ["Why aggregate results are the best choice for token efficiency"](#why-aggregate-results-are-the-best-choice-for-token-efficiency) below.
+- **No discovery endpoint.** Log search requires metadata and knowledge of the log format(s). The API can't autocomplete metadata the way the UI does — see [`skills/discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md) and [`skills/discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), or this client's read-only `list_partitions()`/`list_extraction_rules()`/`list_scheduled_views()` calls.
+- **Good scoping practices** In large instances poor scoped or 'fishing trip' searches vs raw logs can be slow, inefficient or incur pay-per-search charges on some plans (infrequent, flex) see: [`skills/query-scoping-efficiency`](skills/query-scoping-efficiency/SKILL.md).
+- **Search best practices** LLMs are often poor at writing syntactically correct Sumo Logic log searches, or write valid but very slow / inefficient ones. Skills in this repo help with common search patterns: [`skills/common-query-patterns`](skills/common-query-patterns/SKILL.md) and [`skills/operator-ordering`](skills/operator-ordering/SKILL.md)
+- **Per-key rate limits (429s) and search job api patterns.** The 4 requests/sec rate limit means UI-side queuing is essential, especially for high volume or multi-agent scenarios — see [Engineers building agentic automation](#who-this-is-for) above for this client's built-in throttling and backoff. Common pitfalls and patterns are documented for those wanting a good start for 'roll your own'. see: [`skills/search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md) One such gotcha is the **`pendingErrors` masquerading as empty results.** A broken query can report zero rows with errors — see the "State Machine" section of [`skills/search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md).
+- **Token/output cost.** Directly reading large log search result sets in an LLM context results in high token / context use. Query shape (aggregate vs. raw) dominates response size well before any formatting choice — see ["Why aggregate results are the best choice for token efficiency"](#why-aggregate-results-are-the-best-choice-for-token-efficiency) below. The 'agent friendly' cli can export in csv format: proven to reduce token usage dramatically vs JSON.
+- **Unbounded result sets.** Keep result sets small and compact — cap every raw query with a first-line `| limit N` and every aggregate with `| sort ... | limit N` / `| topk`, and use `nodrop` on `parse`/`json` field extraction so rows with a missing field don't silently disappear. See [`skills/operator-ordering`](skills/operator-ordering/SKILL.md).
 
-Steps 2–6 above map onto the API/MCP stages below. Step 1 (reusing saved content) is UI/Library-only for `sumo_search_client.py` and `sumosearch` — both are scoped to the Search Job API — but Sumo's own MCP investigator skill can reuse dashboards and alerts directly (see the table's last row); that's a Sumo-provided capability layered on MCP, not something this repo's client or CLI expose.
+Let's consider how steps 2–6 above map onto the API/MCP stages below. Step 1 (reusing saved content) is UI/Library-only for `sumo_search_client.py` and `sumosearch` — both are scoped to the Search Job API — but Sumo's own MCP investigator skill can reuse dashboards and alerts directly (see the table's last row); that's a Sumo-provided capability layered on MCP, not something this repo's client or CLI expose.
 
-| Stage | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP |
-| --- | --- | --- | --- |
-| **Discover** data (partitions, source categories, scheduled views) | `list_partitions()`, `list_extraction_rules()`, `list_scheduled_views()` — synchronous, no job created | `sumosearch discover partitions\|fers\|views` | `listPartitions`, `listExtractionRules` |
-| **Schema discovery** (what fields does this query actually produce) | Manual — `list_extraction_rules()` plus hand-writing a raw sample yourself | First-class `sumosearch schema` command | Not exposed |
-| **Pre-flight cost check** (scan bytes before committing) | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools |
-| **Sample** a query on a small window | Manual — `run_search()` with `\| limit N` | `sumosearch sample` | Manual — `runLogSearch` with `\| limit N` |
-| **Run** a search (create → poll → fetch → delete) | `run_search()` | `sumosearch search run` | `runLogSearch` |
-| **Work with results** | Raw API JSON — bring your own formatting | Built-in csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |
-| **Bulk export** past the 100k-message cap | `estimate_count()` + `time_split_search()` | `sumosearch export` (auto time-splits) | Not in the three listed tools |
-| **Investigation workflow discipline** (sample-before-run, first-line limits, `nodrop`) | Left to the caller — `skills/` documents it | Left to the caller — `skills/` documents it | Not enforced by the raw tools; Sumo's [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) layers a mandatory Discover (parallel `listPartitions`/`listCustomFields`/`listExtractionRules`) → 5-min/≤5-row Sample → Targeted Search workflow on top as agent policy |
-| **Insights, Detection Rules, Alerts, Dashboards** (SIEM triage & content reuse — not log search) | Out of scope — Search Job API only | Out of scope — Search Job API only | Native, via the [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill): `getInsights`, `getRules`, `alertsSearch`, `listDashboards`, `createDashboard`, etc. |
+| Stage | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP | Applicable skill(s) |
+| --- | --- | --- | --- | --- |
+| **Discover** data (partitions, source categories, scheduled views) | `list_partitions()`, `list_extraction_rules()`, `list_scheduled_views()` — synchronous, no job created | `sumosearch discover partitions\|fers\|views` | `listPartitions`, `listExtractionRules` | [`discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md), [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md), [`search-siem-investigation`](skills/search-siem-investigation/SKILL.md) |
+| **Schema discovery** (what fields does this query actually produce) | Manual — `list_extraction_rules()` plus hand-writing a raw sample yourself | First-class `sumosearch schema` command | Not exposed | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md) |
+| **Pre-flight cost check** (scan bytes before committing) | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools | [`query-scoping-efficiency`](skills/query-scoping-efficiency/SKILL.md), [`search-indexes-partitions`](skills/search-indexes-partitions/SKILL.md) |
+| **Sample** a query on a small window | Manual — `run_search()` with `\| limit N` | `sumosearch sample` | Manual — `runLogSearch` with `\| limit N` | [`discovery-profile-scope`](skills/discovery-profile-scope/SKILL.md), [`operator-ordering`](skills/operator-ordering/SKILL.md) |
+| **Write and Run** a search (create → poll → fetch → delete) | `run_search()` | `sumosearch search run` | `runLogSearch` | [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md), [`common-query-patterns`](skills/common-query-patterns/SKILL.md), [`ai-agent-result-shaping`](skills/ai-agent-result-shaping/SKILL.md) |
+| **Work with results** | Raw API JSON — bring your own formatting | Built-in csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |  |
+| **Investigation workflow discipline** (sample-before-run, first-line limits, `nodrop`) | Left to the caller — `skills/` documents it | Left to the caller — `skills/` documents it | Not enforced by the raw tools; Sumo's [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) layers a mandatory Discover (parallel `listPartitions`/`listCustomFields`/`listExtractionRules`) → 5-min/≤5-row Sample → Targeted Search workflow on top as agent policy | [`operator-ordering`](skills/operator-ordering/SKILL.md), [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md) |
+| **Insights, Detection Rules, Alerts, Dashboards** (SIEM triage & content reuse — not log search) | Out of scope — Search Job API only | Out of scope — Search Job API only | Native, via the [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill): `getInsights`, `getRules`, `alertsSearch`, `listDashboards`, `createDashboard`, etc. |  |
 
-The CLI doesn't replace either existing path — it's the missing third leg for the specific case of running a search or answering a discovery question *from a shell*. The query-authoring skills in `skills/` apply unchanged across all three; only the transport/output layer differs. See [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md) for the full design rationale and empirical token-cost measurements behind these choices.
+## Why aggregate results are the best choice for token efficiency
+
+If a result feeds an LLM/agent caller rather than a human dashboard, the query shape matters far more than any client-side formatting choice. Measured against real data (structured JSON, space-delimited text, and a JSON-in-`_raw` application log — full methodology and numbers in [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md)):
+
+- The same underlying events, expressed as an aggregate (`records`) query vs. raw messages, differed by **13–39x** in output size across the datasets tested — collapsing events into a `count by`/`sum()`/`avg()` aggregate server-side is the single biggest token-cost lever available, well before any formatting choice.
+- For `records` output specifically, **CSV came out ~2.3x smaller than raw JSON** for the same rows — dropping repeated key names and JSON punctuation. Prefer CSV (or an equivalent flat/columnar text format) over JSON when the result is aggregate data headed for an LLM context.
+- `| fields` does **not** reliably shrink raw-message (`messages`) output — on an account with a large field-extraction-rule catalog it left the full row envelope intact, and a broader `| fields`/`json auto` clause actually inflated it by triggering a global field union across every field the account has ever defined. If raw messages are unavoidable, trim fields **client-side after fetch**, not via an in-query `| fields`/`json auto` clause.
+
+### Suggested approach
+
+1. Default to an aggregate query (`count by`, `sum()`, `avg()`, ...) with `requires_raw_messages=False` unless the caller genuinely needs individual log lines — see the example above and `skills/common-query-patterns/SKILL.md`.
+2. Extract only the specific fields actually needed from JSON `_raw` payloads by name (`| json field=_raw "x" as x`), not `| json auto` — auto-parsing can pull in every field the account has ever defined, not just what's in the current row.
+3. Cap every aggregate with `| sort ... | limit N` or `| topk(N, ...)` — an uncapped `count by` over a high-cardinality field can still return thousands of rows.
+4. When rendering `records` results for an LLM/agent caller, prefer CSV over JSON; for `messages` results, project down to the fields actually needed after fetching rather than relying on the query to have already done it.
+
+See [`skills/ai-agent-result-shaping/SKILL.md`](skills/ai-agent-result-shaping/SKILL.md) for the general query-shaping principles this analysis confirms, and [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md) for the full per-format token measurements and an agent-oriented CLI design built on these findings.
 
 ## Quickstart: `sumo_search_client.py`
 
@@ -128,6 +158,8 @@ Region endpoints:
 
 ## Quickstart: the `sumosearch` CLI
 
+The CLI doesn't replace either existing path — it's the missing third leg for the specific case of running a search or answering a discovery question *from a shell*. The query-authoring skills in `skills/` apply unchanged across all three; only the transport/output layer differs. See [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md) for the full design rationale and empirical token-cost measurements behind these choices.
+
 Install `sumosearch` as an isolated tool, on its own PATH entry, from the root of this repo:
 
 ```bash
@@ -162,62 +194,6 @@ uv run sumosearch export '_sourceCategory=prod/app error' --from -24h --to now \
 
 Full command list, every flag, output-format defaults, and the token-budget controls (`--max-tokens`, `--drop-null-columns`, the stderr warning): see [`cli/README.md`](cli/README.md).
 
-## Contents
-
-| File | Purpose |
-| --- | --- |
-| `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. See [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for manual job control, configuration, and logging. |
-| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv tool install .` or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
-| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. |
-| `tests/` | Unit tests (`test_sumo_search_client.py`, `test_cli.py`, no credentials needed) and a live-credential integration test. |
-| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client and the CLI — not needed if you're just copying `sumo_search_client.py` into your own project. |
-
-## Skills work with this client, the CLI, or Sumo's `runLogSearch` MCP tool
-
-The `skills/` directory is not tied to `sumo_search_client.py`. Each skill teaches query-authoring and search-methodology patterns — how to scope a query to keep scan cost down, how to discover which partition or source category holds the data you need, how to order pipeline operators, how to shape results for an LLM caller — that apply the same way regardless of how the query actually gets executed. Whether you're running queries through this client, the `sumosearch` CLI, or Sumo's official `runLogSearch` MCP tool, the skills apply unchanged; only the transport differs.
-
-Start with [`skills/README.md`](skills/README.md) for the full skill index, what each one covers, and a suggested reading order for a new integration.
-
-## Why aggregate results are the best choice for token efficiency
-
-If a result feeds an LLM/agent caller rather than a human dashboard, the query shape matters far more than any client-side formatting choice. Measured against real data (structured JSON, space-delimited text, and a JSON-in-`_raw` application log — full methodology and numbers in [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md)):
-
-- The same underlying events, expressed as an aggregate (`records`) query vs. raw messages, differed by **13–39x** in output size across the datasets tested — collapsing events into a `count by`/`sum()`/`avg()` aggregate server-side is the single biggest token-cost lever available, well before any formatting choice.
-- For `records` output specifically, **CSV came out ~2.3x smaller than raw JSON** for the same rows — dropping repeated key names and JSON punctuation. Prefer CSV (or an equivalent flat/columnar text format) over JSON when the result is aggregate data headed for an LLM context.
-- `| fields` does **not** reliably shrink raw-message (`messages`) output — on an account with a large field-extraction-rule catalog it left the full row envelope intact, and a broader `| fields`/`json auto` clause actually inflated it by triggering a global field union across every field the account has ever defined. If raw messages are unavoidable, trim fields **client-side after fetch**, not via an in-query `| fields`/`json auto` clause.
-
-### Suggested approach
-
-1. Default to an aggregate query (`count by`, `sum()`, `avg()`, ...) with `requires_raw_messages=False` unless the caller genuinely needs individual log lines — see the example above and `skills/common-query-patterns/SKILL.md`.
-2. Extract only the specific fields actually needed from JSON `_raw` payloads by name (`| json field=_raw "x" as x`), not `| json auto` — auto-parsing can pull in every field the account has ever defined, not just what's in the current row.
-3. Cap every aggregate with `| sort ... | limit N` or `| topk(N, ...)` — an uncapped `count by` over a high-cardinality field can still return thousands of rows.
-4. When rendering `records` results for an LLM/agent caller, prefer CSV over JSON; for `messages` results, project down to the fields actually needed after fetching rather than relying on the query to have already done it.
-
-See [`skills/ai-agent-result-shaping/SKILL.md`](skills/ai-agent-result-shaping/SKILL.md) for the general query-shaping principles this analysis confirms, and [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md) for the full per-format token measurements and an agent-oriented CLI design built on these findings.
-
-### Handling errors correctly
-
-```python
-from sumo_search_client import SumoSearchJobFailed, SumoSearchTimeout, SumoSearchError
-
-try:
-    result = client.run_search(query='_sourceCateogry=typo-in-field-name | count',
-                               from_time="-1h", to_time="now")
-except SumoSearchJobFailed as exc:
-    print(f"search failed: {exc}")   # covers pendingErrors AND CANCELLED/FORCE PAUSED jobs
-except SumoSearchTimeout as exc:
-    print(f"search timed out: {exc}")
-except SumoSearchError as exc:
-    print(f"search request error (HTTP {exc.status_code}): {exc}")
-```
-
-A naive `if not result.items: print("no results")` check misses a broken query silently reported via `pendingErrors` — see the "State Machine" section of [`skills/search-job-api-best-practices/SKILL.md`](skills/search-job-api-best-practices/SKILL.md) for the full rationale and every other exception this client raises.
-
-### Exporting more than 100,000 raw messages
-
-A single job silently truncates raw-message results at 100,000; use `estimate_count()` + `time_split_search()` to probe volume and split the time range into windows that stay under the cap. See [`skills/search-job-api-best-practices/SKILL.md`](skills/search-job-api-best-practices/SKILL.md#large-exports-time-splitting) for the full pattern, and [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for a runnable example against this client.
-
-For everything else specific to `sumo_search_client.py` — manual create/poll/fetch control, discovery-endpoint calls, constructor configuration (rate limits, retries, timeouts), and logging — see [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md).
 
 ## Development & Testing
 
