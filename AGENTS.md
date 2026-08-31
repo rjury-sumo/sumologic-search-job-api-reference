@@ -21,6 +21,9 @@ repo, internal CLI, or specific harness.
   dependency.
 - `tests/test_sumo_search_client.py` — unit tests, no credentials/network.
   Must always pass; this is what CI runs.
+- `tests/test_cli.py` — unit tests for `cli/`, same no-credentials/no-network
+  constraint. Needs `uv sync --group dev --group cli` (the base `--group dev`
+  alone doesn't install `typer`).
 - `tests/integration_test_sumo_search_client.py` — needs live
   `SUMO_ACCESS_ID`/`SUMO_ACCESS_KEY`. Not pytest-collected (script style,
   run directly). Never wire this into CI.

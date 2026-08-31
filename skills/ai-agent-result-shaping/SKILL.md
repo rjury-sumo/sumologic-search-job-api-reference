@@ -72,6 +72,24 @@ picture.
    need before the query ends — `map` payloads carry only what's asked
    for, cutting both response size and downstream token cost.
 
+   **Caveat: this is reliable for aggregate/`records` output, not for
+   raw-message/`messages` output.** On the `records` path the server
+   already controls the column set predictably, so `| fields` works as
+   expected. On the `messages` path, a server-side `| fields` can no-op
+   (leaving the full row envelope intact) or interact badly with a large
+   account field catalog, unioning far more columns than requested. For
+   raw messages, trim client-side after fetch instead — either this
+   repo's `sumosearch` CLI, which does this automatically for every
+   `messages`-typed result (a small fixed envelope plus `--fields`
+   additions, applied in the CLI's own code, not via the query), or the
+   equivalent pattern in a caller's own code if not using this CLI. This
+   isn't specific to one Sumo org or sandbox: it generalizes with the size
+   of an account's FER/field catalog — any org with a large set of
+   admin-defined fields will see the same sparse-column behavior from any
+   in-query mechanism that unions the full catalog, since that's a
+   property of how Sumo Logic's field catalog works, not an artifact of a
+   particular test environment.
+
 ## Client-side settings that matter
 
 - `run_search(..., requires_raw_messages=False)` for any aggregate-only

@@ -25,6 +25,31 @@ teach *how Sumo Logic search works*, not this specific client's API surface
 — they're equally useful driving queries through `sumo_search_client.py` or
 through Sumo's official `runSearchJob` MCP tool.
 
+**An agent (or human) driving ad hoc searches from a terminal/bash tool** —
+the `sumosearch` CLI in `cli/` is a third path, for callers that don't want
+to embed the Python client in a program and don't have MCP tool access.
+It's a small `kubectl`-style wrapper over the same endpoints, with
+token-efficient output shaping (csv/ndjson/json/table, aggregate-friendly
+defaults, client-side field trimming for raw messages) built in rather
+than left to the caller. See "Quickstart: the `sumosearch` CLI" below.
+
+| Capability | `sumo_search_client.py` | `sumosearch` CLI | Sumo MCP (`runSearchJob`, `listPartitions`, `listFers`) |
+| --- | --- | --- | --- |
+| Transport | Python library, embed in your own code | Subprocess, invoked via shell/bash tool | In-chat tool call, no subprocess |
+| Best for | Building a service/pipeline on top of the API | An agent (or human) driving ad hoc searches from a terminal/bash tool | An agent inside a harness with native MCP tool access |
+| Output shaping | None — raw API JSON, bring your own | Built-in: csv/json/ndjson/table, agent-optimized defaults, client-side field trimming that actually works on the raw-message path | Whatever Sumo's MCP server returns — out of this repo's control |
+| Schema/field discovery | Manual (`list_extraction_rules()` + hand-write a raw sample) | First-class `sumosearch schema` command | Not exposed |
+| Scan estimate / pre-flight cost check | `estimate_scan()` | `sumosearch search estimate` | Not in the three listed tools |
+| Dependency footprint | `requests` only | `typer`, isolated to an opt-in `cli` dependency group | None (no install) |
+
+The CLI doesn't replace either existing path — it's the missing third leg
+for the specific case of running a search or answering a discovery
+question *from a shell*. The query-authoring skills in `skills/` apply
+unchanged across all three; only the transport/output layer differs. See
+[`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md)
+for the full design rationale and empirical token-cost measurements behind
+these choices.
+
 ## Quickstart
 
 ```bash
@@ -72,14 +97,50 @@ Region endpoints:
 | AU | `https://api.au.sumologic.com` |
 | EU | `https://api.eu.sumologic.com` |
 
+## Quickstart: the `sumosearch` CLI
+
+```bash
+uv sync --group cli
+```
+
+Credentials come from the same environment variables as the Python client
+— `SUMO_ACCESS_ID`, `SUMO_ACCESS_KEY`, `SUMO_ENDPOINT` — never as CLI flags,
+so they don't end up in shell history. (`--access-id`/`--access-key`/
+`--endpoint` exist as an override, not the primary path.)
+
+```bash
+# Run a search job (create -> poll -> fetch -> delete); ndjson by default
+# for raw-message results, csv by default for aggregate/records results.
+uv run sumosearch search run '_sourceCategory=prod/app error' --from -1h --to now
+
+# Discover partitions, filtered by a case-insensitive substring match
+uv run sumosearch discover partitions --grep cloudtrail
+
+# Profile a query's field schema from a small sample (PRESENT/TYPE/CONST/
+# INDEX-TIME/EXAMPLE per field) without hand-writing a sample query
+uv run sumosearch schema '_sourceCategory=prod/app' --from -1h --to now
+
+# Bulk export straight to disk (time-splits automatically past ~80k rows)
+uv run sumosearch export '_sourceCategory=prod/app error' --from -24h --to now \
+    --format csv --out events.csv
+```
+
+Other subcommands: `search estimate`/`search count` (pre-flight scan size
+and row-count checks, no job created), `discover fers`/`discover views`,
+and `sample` (a quick `<query> | limit N` preview). All commands accept
+`--format csv|ndjson|json|table` where relevant. See `uv run sumosearch
+--help` and `uv run sumosearch <command> --help` for the full flag
+reference.
+
 ## Contents
 
 | File | Purpose |
 | --- | --- |
 | `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. |
+| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. |
 | `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. |
-| `tests/` | Unit tests (`test_sumo_search_client.py`, no credentials needed) and a live-credential integration test. |
-| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client — not needed if you're just copying `sumo_search_client.py` into your own project. |
+| `tests/` | Unit tests (`test_sumo_search_client.py`, `test_cli.py`, no credentials needed) and a live-credential integration test. |
+| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client and the CLI — not needed if you're just copying `sumo_search_client.py` into your own project. |
 
 ## Skills work with this client or with Sumo's `runSearchJob` MCP tool
 

@@ -51,6 +51,18 @@ dimension instead of a bare keyword. The `sumologic_volume` fast path
 `_sourceCategory` against `_collector`/`_sourceHost` values within it, so
 this always goes through a raw-log aggregate against the real partition.
 
+> **Caveat: OTel/HTTP-collector-fronted sources can have degenerate
+> `_sourceHost`/`_collector` identity.** When logs arrive via an
+> OpenTelemetry collector or an HTTP-source-fronted pipeline,
+> `_sourceHost`/`_collector` often reflect the *collector's* own endpoint
+> or identity, not the originating device — e.g. a real sandbox with
+> `_sourceCategory="otel/mac"` returns exactly one `_sourceHost` value for
+> the whole scope, no matter how many distinct Macs are actually sending
+> logs. Don't assume these values map 1:1 to distinct real hosts for such
+> sources; real host identity typically lives in a resource-attribute
+> field instead (e.g. `host.name`/`host.group`), and this enumeration step
+> can be misleading until you check for one.
+
 ## Profile the schema with a raw sample
 
 Now that scope is narrowed to a specific partition and source category,
@@ -95,6 +107,15 @@ straight into the scope line for bloom-filter-speed matching (see
 Once index-time fields are identified, `operator-ordering` covers where
 they belong in the pipeline (scope line or early `| where`, ahead of
 `| parse`).
+
+> **Fast path if you have this repo's CLI:** `sumosearch schema <query>
+> --from --to` automates this exact workflow end-to-end — raw sample,
+> `autoParsingMode=Manual`, index-time-vs-search-time field distinction,
+> and CONST-field (single-distinct-value) detection — in one command
+> instead of hand-writing the sample query and eyeballing the JSON. It's a
+> shortcut for the technique above, not a replacement for it: a caller
+> driving queries through Sumo's MCP tool (or otherwise without this CLI)
+> still needs the manual `autoParsingMode`/re-sample technique.
 
 ## Custom / non-standard log sources
 
