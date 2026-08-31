@@ -6,7 +6,10 @@ with csv/ndjson/json/table output formats, client-side field projection
 for `messages` results, a stderr token-budget warning, `--max-tokens`
 truncation, and `--drop-null-columns`. Phase 2 adds `schema` (profiling
 logic lives in cli/schema.py; this module just wires up the command) and
-`sample`. `export` is a later phase — see
+`sample`. Phase 3 adds `export` — a file-output path that deliberately
+skips the fixed-envelope/`--fields` projection (full `item["map"]` rows),
+using `time_split_search()` under the hood once the estimated row count
+would exceed the 100k raw-message per-job cap. See
 docs/dev/agent-cli-analysis-and-plan.md.
 
 Credentials are resolved from the environment (`SUMO_ACCESS_ID`,
@@ -19,6 +22,7 @@ override, not the primary path.
 from __future__ import annotations
 
 import json
+import math
 
 import typer
 
@@ -30,6 +34,7 @@ from sumo_search_client import (
     SumoSearchError,
     estimate_count,
     resolve_time,
+    time_split_search,
 )
 
 app = typer.Typer(name="sumosearch", help="CLI for the Sumo Logic Search Job API.")
@@ -39,6 +44,20 @@ app.add_typer(search_app, name="search")
 app.add_typer(discover_app, name="discover")
 
 _AUTO_PARSING_MODES = {"manual": "Manual", "autoparse": "AutoParse"}
+
+# Safety margin below MAX_RAW_MESSAGES (100k) — matches time_split_search()'s
+# own docstring guidance ("size interval_hours so no window exceeds ~80,000
+# rows"). Above this estimated row count, `export` time-splits instead of
+# running a single job.
+EXPORT_SPLIT_THRESHOLD = 80_000
+
+# Floor for auto-computed interval_hours — keeps a pathologically high
+# estimated count (relative to the requested window) from computing an
+# interval of a few seconds, which would mean thousands of tiny sequential
+# jobs. A few minutes is still fine-grained enough to be useful.
+EXPORT_MIN_INTERVAL_HOURS = 1 / 60  # 1 minute
+
+EXPORT_FORMATS = ("csv", "ndjson", "json")
 
 
 class Config:
@@ -381,6 +400,100 @@ def sample_cmd(
             columns = formats.drop_null_columns(rows, columns)
 
     typer.echo(_render_output(result, rows, columns, is_messages, fmt))
+
+
+# ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+@app.command("export")
+def export_cmd(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Sumo Logic search query."),
+    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
+    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    output_format: str = typer.Option(..., "--format", help="csv|ndjson|json (no table — file output)."),
+    out: str = typer.Option(..., "--out", help="Output file path."),
+    interval_hours: float | None = typer.Option(
+        None, "--interval-hours",
+        help="Override the auto-computed time-split window size (hours). Only "
+             "relevant when the estimated row count exceeds the split threshold.",
+    ),
+) -> None:
+    """Bulk export straight to disk — full, untrimmed `item['map']` rows (no
+    fixed-envelope/`--fields` projection, unlike `search run`/`sample`).
+    Uses time_split_search() under the hood when the estimated row count
+    would exceed the 100k raw-message per-job cap. Never prints exported
+    data to stdout — only a one-line completion summary."""
+    if output_format not in EXPORT_FORMATS:
+        typer.echo(
+            f"Unsupported --format '{output_format}' for export: choose from "
+            f"{', '.join(EXPORT_FORMATS)}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    config: Config = ctx.obj
+    client = _client(config)
+
+    from_ms = int(resolve_time(from_time))
+    to_ms = int(resolve_time(to_time))
+
+    try:
+        estimated = estimate_count(client, query, from_time, to_time)
+    except SumoSearchError as exc:
+        typer.echo(f"Export failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if estimated <= EXPORT_SPLIT_THRESHOLD:
+        try:
+            result = client.run_search(query, from_time, to_time, limit=None)
+        except SumoSearchError as exc:
+            typer.echo(f"Export failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        rows = [item.get("map", {}) for item in result.items]
+        summary_suffix = "single job, no time-splitting needed"
+    else:
+        total_window_hours = (to_ms - from_ms) / 3_600_000
+        if interval_hours is not None:
+            effective_interval_hours = interval_hours
+        else:
+            effective_interval_hours = max(
+                total_window_hours * (EXPORT_SPLIT_THRESHOLD / estimated),
+                EXPORT_MIN_INTERVAL_HOURS,
+            )
+        try:
+            items = time_split_search(
+                client, query, from_ms, to_ms,
+                interval_hours=effective_interval_hours, result_type="messages",
+            )
+        except ValueError as exc:
+            typer.echo(
+                f"Export failed: {exc}. Try a smaller explicit --interval-hours.",
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        except SumoSearchError as exc:
+            typer.echo(f"Export failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        rows = [item.get("map", {}) for item in items]
+        windows = max(1, math.ceil(total_window_hours / effective_interval_hours))
+        summary_suffix = f"{windows} time windows"
+
+    columns = formats.union_columns(rows, None)
+    if output_format == "csv":
+        content = formats.render_csv(rows, columns)
+    elif output_format == "ndjson":
+        content = formats.render_ndjson(rows, None)
+    else:
+        content = formats.render_json(rows, None)
+
+    with open(out, "w") as f:
+        f.write(content)
+        if content:
+            f.write("\n")
+
+    typer.echo(f"wrote {len(rows)} rows to {out} ({summary_suffix})")
 
 
 # ---------------------------------------------------------------------------

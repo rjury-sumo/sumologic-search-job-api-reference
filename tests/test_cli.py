@@ -651,3 +651,227 @@ def test_sumo_search_error_clean_exit_1(monkeypatch):
     out = runner.invoke(clim.app, ["search", "run", "*", "--from", "-1h", "--to", "now"], env=ENV)
     assert out.exit_code == 1
     assert "Search failed" in out.output
+
+
+# ---------------------------------------------------------------------------
+# sumosearch export
+# ---------------------------------------------------------------------------
+
+def _count_run_search(count: int, data_result: ssc.SearchJobResult):
+    """Fake `run_search` that answers estimate_count()'s `<query> | count`
+    sub-call with `count`, and the actual export query with `data_result`."""
+    def fake(query, from_time, to_time, **kwargs):
+        if query.endswith("| count"):
+            return records_result([{"_count": str(count)}])
+        return data_result
+    return fake
+
+
+def test_export_rejects_table_format(monkeypatch, tmp_path):
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "x.csv"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-1h", "--to", "now",
+                                   "--format", "table", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 1
+    assert "Unsupported --format" in out.output
+
+
+def test_export_estimate_count_error_clean_exit_1(monkeypatch, tmp_path):
+    def raise_error(*a, **k):
+        raise ssc.SumoSearchError("boom", status_code=400)
+
+    client = make_fake_client(run_search=raise_error)
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "x.csv"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-1h", "--to", "now",
+                                   "--format", "csv", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 1
+    assert "Export failed" in out.output
+
+
+def test_export_single_shot_csv_writes_full_map(monkeypatch, tmp_path):
+    """Small estimated count -> a single run_search() call over the whole
+    window, and every row is the FULL map (not the 4-field messages
+    envelope `search run`/`sample` use) — `custom_field` is not in
+    MESSAGE_ENVELOPE_FIELDS, so its presence proves no trimming happened."""
+    rows = [
+        {"_messagetime": "1", "_sourcecategory": "sc", "_sourcehost": "h",
+         "_raw": "line1", "custom_field": "keepme"},
+    ]
+    captured = {}
+
+    def fake_run_search(query, from_time, to_time, **kwargs):
+        if query.endswith("| count"):
+            return records_result([{"_count": "5"}])
+        captured["query"] = query
+        captured["kwargs"] = kwargs
+        return messages_result(rows)
+
+    client = make_fake_client(run_search=fake_run_search)
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.csv"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-1h", "--to", "now",
+                                   "--format", "csv", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert captured["query"] == "*"
+    assert captured["kwargs"]["limit"] is None
+
+    content = out_file.read_text()
+    header = content.splitlines()[0]
+    assert "custom_field" in header
+    assert "keepme" in content
+
+    assert "wrote 1 rows" in out.stdout
+    assert "single job, no time-splitting needed" in out.stdout
+    # never printed to stdout
+    assert "keepme" not in out.stdout
+
+
+def test_export_single_shot_ndjson_full_map(monkeypatch, tmp_path):
+    rows = [{"_raw": "line1", "custom_field": "keepme"}]
+    client = make_fake_client(run_search=_count_run_search(5, messages_result(rows)))
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.ndjson"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-1h", "--to", "now",
+                                   "--format", "ndjson", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 0, out.output
+    line = jsonlib.loads(out_file.read_text().strip())
+    assert line == {"_raw": "line1", "custom_field": "keepme"}
+
+
+def test_export_single_shot_json_full_map(monkeypatch, tmp_path):
+    rows = [{"_raw": "line1", "custom_field": "keepme"}]
+    client = make_fake_client(run_search=_count_run_search(5, messages_result(rows)))
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.json"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-1h", "--to", "now",
+                                   "--format", "json", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 0, out.output
+    body = jsonlib.loads(out_file.read_text())
+    assert body == rows
+
+
+def test_export_interval_hours_override_skips_auto_sizing(monkeypatch, tmp_path):
+    """When --interval-hours is passed explicitly, it must reach
+    time_split_search() unchanged — the auto-sizing formula (which would
+    compute something else entirely for this count/window combo) must be
+    skipped, not merely overridden after the fact."""
+    captured = {}
+
+    def fake_time_split_search(client, query, from_ms, to_ms, *, interval_hours,
+                               time_zone="UTC", result_type="messages"):
+        captured["interval_hours"] = interval_hours
+        return [{"map": {"_raw": "x"}}]
+
+    monkeypatch.setattr(clim, "time_split_search", fake_time_split_search)
+
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "999999"}]))
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.ndjson"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "0", "--to", "7200000",
+                                   "--format", "ndjson", "--out", str(out_file),
+                                   "--interval-hours", "0.5"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert captured["interval_hours"] == 0.5
+
+
+def test_export_time_split_value_error_is_clean_cli_error(monkeypatch, tmp_path):
+    def fake_time_split_search(*a, **k):
+        raise ValueError("window 0-3600000 hit the 100000 message cap")
+
+    monkeypatch.setattr(clim, "time_split_search", fake_time_split_search)
+
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "999999"}]))
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.csv"
+    out = runner.invoke(clim.app, ["export", "*", "--from", "-2h", "--to", "now",
+                                   "--format", "csv", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 1
+    assert "Export failed" in out.output
+    assert "smaller explicit --interval-hours" in out.output
+    assert not out_file.exists()
+
+
+# -- time-split path exercised at the real HTTP level --------------------
+# Unlike the tests above (which monkeypatch run_search/time_split_search
+# directly), this one builds a real SumoSearchClient over a queued-response
+# fake session (same pattern as tests/test_sumo_search_client.py's
+# FakeSession) so create/poll/fetch/delete actually run for each window,
+# and multiple time windows are verified via the session's own call log.
+
+class QueuedFakeSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls: list[dict] = []
+        self.auth = None
+        self.headers: dict = {}
+
+    def request(self, method, url, params=None, json=None):
+        self.calls.append({"method": method, "url": url, "params": params, "json": json})
+        return self._responses.pop(0)
+
+    def delete(self, url):
+        self.calls.append({"method": "delete", "url": url})
+        return self._responses.pop(0)
+
+
+def _job_cycle_responses(job_id: str, *, record_count: int, message_count: int,
+                         page_body: dict) -> list[requests.Response]:
+    """The 3 non-delete responses for one create -> poll -> fetch cycle,
+    plus a delete response — matches exactly what run_search() issues when
+    the job reaches DONE on the first status poll."""
+    return [
+        make_response(200, {"id": job_id}),
+        make_response(200, {
+            "state": "DONE GATHERING RESULTS", "recordCount": record_count,
+            "messageCount": message_count, "pendingErrors": [], "pendingWarnings": [],
+        }),
+        make_response(200, page_body),
+        make_response(200),  # delete
+    ]
+
+
+def test_export_time_split_path_spans_multiple_windows(monkeypatch, tmp_path):
+    responses = [
+        # estimate_count()'s "<query> | count" job
+        *_job_cycle_responses("job-count", record_count=1, message_count=0,
+                              page_body={"records": [{"map": {"_count": "100000"}}]}),
+        # window 1: 0 - 3_600_000
+        *_job_cycle_responses("job-w1", record_count=0, message_count=2,
+                              page_body={"messages": [
+                                  {"map": {"_raw": "a", "custom_field": "w1"}},
+                                  {"map": {"_raw": "b", "custom_field": "w1"}},
+                              ]}),
+        # window 2: 3_600_000 - 7_200_000
+        *_job_cycle_responses("job-w2", record_count=0, message_count=1,
+                              page_body={"messages": [{"map": {"_raw": "c", "custom_field": "w2"}}]}),
+    ]
+    session = QueuedFakeSession(responses)
+    client = ssc.SumoSearchClient("test-id", "test-key", "https://api.example.com",
+                                  session=session, min_interval=0.0)
+    patch_client(monkeypatch, client)
+
+    out_file = tmp_path / "export.ndjson"
+    # Exactly 2 hours (0 to 7_200_000 ms), --interval-hours 1 -> exactly 2 windows.
+    out = runner.invoke(clim.app, ["export", "*", "--from", "0", "--to", "7200000",
+                                   "--format", "ndjson", "--out", str(out_file),
+                                   "--interval-hours", "1"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "wrote 3 rows" in out.stdout
+    assert "2 time windows" in out.stdout
+
+    lines = [jsonlib.loads(line) for line in out_file.read_text().strip().splitlines()]
+    assert len(lines) == 3
+    assert {"_raw": "a", "custom_field": "w1"} in lines
+    assert {"_raw": "c", "custom_field": "w2"} in lines
+
+    create_calls = [c for c in session.calls if c["method"] == "post" and c["url"].endswith("/search/jobs")]
+    assert len(create_calls) == 3  # 1 count job + 2 data-window jobs
