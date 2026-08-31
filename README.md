@@ -114,6 +114,55 @@ The client auto-detects `records` vs. `messages` from the job's
 `recordCount`/`messageCount` — you never need to tell it which one your
 query produces.
 
+### Token efficiency: aggregate results vs. raw messages
+
+If a result feeds an LLM/agent caller rather than a human dashboard, the
+query shape matters far more than any client-side formatting choice.
+Measured against real data (structured JSON, space-delimited text, and a
+JSON-in-`_raw` application log — full methodology and numbers in
+[`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md)):
+
+- The same underlying events, expressed as an aggregate (`records`) query
+  vs. raw messages, differed by **13–39x** in output size across the
+  datasets tested — collapsing events into a `count by`/`sum()`/`avg()`
+  aggregate server-side is the single biggest token-cost lever available,
+  well before any formatting choice.
+- For `records` output specifically, **CSV came out ~2.3x smaller than
+  raw JSON** for the same rows — dropping repeated key names and JSON
+  punctuation. Prefer CSV (or an equivalent flat/columnar text format)
+  over JSON when the result is aggregate data headed for an LLM context.
+- `| fields` does **not** reliably shrink raw-message (`messages`)
+  output — on an account with a large field-extraction-rule catalog it
+  left the full row envelope intact, and a broader `| fields`/`json auto`
+  clause actually inflated it by triggering a global field union across
+  every field the account has ever defined. If raw messages are
+  unavoidable, trim fields **client-side after fetch**, not via an
+  in-query `| fields`/`json auto` clause.
+
+Suggested approach:
+
+1. Default to an aggregate query (`count by`, `sum()`, `avg()`, ...) with
+   `requires_raw_messages=False` unless the caller genuinely needs
+   individual log lines — see the example above and
+   `skills/common-query-patterns/SKILL.md`.
+2. Extract only the specific fields actually needed from JSON `_raw`
+   payloads by name (`| json field=_raw "x" as x`), not `| json auto` —
+   auto-parsing can pull in every field the account has ever defined, not
+   just what's in the current row.
+3. Cap every aggregate with `| sort ... | limit N` or `| topk(N, ...)` —
+   an uncapped `count by` over a high-cardinality field can still return
+   thousands of rows.
+4. When rendering `records` results for an LLM/agent caller, prefer CSV
+   over JSON; for `messages` results, project down to the fields actually
+   needed after fetching rather than relying on the query to have already
+   done it.
+
+See [`skills/ai-agent-result-shaping/SKILL.md`](skills/ai-agent-result-shaping/SKILL.md)
+for the general query-shaping principles this analysis confirms, and
+[`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md)
+for the full per-format token measurements and an agent-oriented CLI
+design built on these findings.
+
 ### Gotcha: lookup-table reads have no `_raw`
 
 `cat /shared/lookups/<table> | where ...` (and similar lookup-table reads
