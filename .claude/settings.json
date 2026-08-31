@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest *)",
+      "Bash(uv run ruff check *)",
+      "Bash(rtk grep *)",
+      "Bash(uv run ruff format --check *)",
+      "Bash(env | grep *)",
+      "Bash(graphify query *)",
+      "Bash(rtk cat *)",
+      "Bash(sumosearch *)",
+      "Bash(python3 sumo_search_client.py *)",
+      "Bash(uv run python tests/integration_test_sumo_search_client.py *)"
+    ]
+  }
+}
