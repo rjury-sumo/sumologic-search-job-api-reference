@@ -3,9 +3,9 @@
 Lightweight, single-purpose skills (Agent Skills format — YAML frontmatter
 `name`/`description`, no ties to any specific harness) for an AI agent
 querying Sumo Logic — whether through `sumo_search_client.py` one directory
-up or through Sumo's official `runSearchJob` MCP tool. Copy this `skills/`
-directory alongside the client, or use it standalone — nothing here depends
-on the rest of this repo.
+up, the `sumosearch` CLI in `../cli/`, or Sumo's official `runSearchJob`
+MCP tool. Copy this `skills/` directory alongside the client, or use it
+standalone — nothing here depends on the rest of this repo.
 
 Each skill is scoped to one concern; load the one matching the task at
 hand rather than all seven. They split into two groups:
