@@ -28,6 +28,7 @@ pytest.importorskip("typer")
 from typer.testing import CliRunner  # noqa: E402
 
 import cli.main as clim  # noqa: E402
+import cli.schema as schema_mod  # noqa: E402
 import sumo_search_client as ssc  # noqa: E402
 
 runner = CliRunner()
@@ -362,6 +363,259 @@ def test_drop_null_columns_drops_all_null_column(monkeypatch):
     patch_client(monkeypatch, client)
 
     out = runner.invoke(clim.app, ["search", "run", "*", "--from", "-1h", "--to", "now",
+                                   "--drop-null-columns"], env=ENV)
+    assert out.exit_code == 0, out.output
+    header = out.stdout.strip().splitlines()[0]
+    assert "empty_field" not in header
+    assert "host" in header and "count" in header
+
+
+# ---------------------------------------------------------------------------
+# cli/schema.py — pure functions
+# ---------------------------------------------------------------------------
+
+def test_try_parse_raw_valid_json_object():
+    assert schema_mod.try_parse_raw('{"a": 1}') == {"a": 1}
+
+
+def test_try_parse_raw_json_array_returns_none():
+    assert schema_mod.try_parse_raw("[1, 2, 3]") is None
+
+
+def test_try_parse_raw_non_json_text_returns_none():
+    assert schema_mod.try_parse_raw("2024-01-01 INFO started") is None
+
+
+def test_try_parse_raw_malformed_json_returns_none():
+    assert schema_mod.try_parse_raw('{"a": 1') is None
+
+
+def test_try_parse_raw_non_string_returns_none():
+    assert schema_mod.try_parse_raw(None) is None
+
+
+def test_flatten_one_level_dot_notation():
+    flat = schema_mod.flatten_one_level({"eventname": "AssumeRole", "os": {"type": "darwin"}})
+    assert flat == {"eventname": "AssumeRole", "os.type": "darwin"}
+
+
+def test_flatten_one_level_does_not_recurse_past_one_level():
+    flat = schema_mod.flatten_one_level({"os": {"type": "darwin", "detail": {"arch": "arm64"}}})
+    assert flat["os.detail"] == {"arch": "arm64"}
+
+
+def test_infer_type_bool_before_int():
+    assert schema_mod.infer_type(True) == "boolean"
+    assert schema_mod.infer_type(1) == "number"
+    assert schema_mod.infer_type(1.5) == "number"
+    assert schema_mod.infer_type("x") == "string"
+    assert schema_mod.infer_type([1]) == "array"
+    assert schema_mod.infer_type({"a": 1}) == "object"
+
+
+def test_profile_sample_const_and_index_time_and_present_fraction():
+    rows = [
+        {"_messagetime": "1", "_sourcecategory": "sc", "sourceipaddress": "1.2.3.4",
+         "_raw": jsonlib.dumps({"eventname": "AssumeRole", "os": {"type": "darwin"}})},
+        {"_messagetime": "2", "_sourcecategory": "sc",
+         "_raw": jsonlib.dumps({"eventname": "PutObject", "os": {"type": "darwin"}})},
+    ]
+    items = [{"map": r} for r in rows]
+    report = schema_mod.profile_sample(items)
+    by_field = {f["FIELD"]: f for f in report.fields}
+
+    # index-time-only field, present in every row
+    assert by_field["_sourcecategory"]["INDEX-TIME"] == "yes"
+    assert by_field["_sourcecategory"]["CONST"] == "YES"
+
+    # search-time field discovered only via parsed _raw
+    assert by_field["os.type"]["INDEX-TIME"] == "no"
+    assert by_field["os.type"]["CONST"] == "YES"
+    assert by_field["os.type"]["PRESENT"] == "2/2"
+
+    # non-constant search-time field
+    assert by_field["eventname"]["CONST"] == "no"
+    assert by_field["eventname"]["INDEX-TIME"] == "no"
+
+    # present in only one of two rows
+    assert by_field["sourceipaddress"]["PRESENT"] == "1/2"
+
+
+def test_profile_sample_unstructured_raw_marks_type_and_hints():
+    rows = [
+        {"_messagetime": str(i), "_sourcecategory": "sc", "_sourcehost": "h",
+         "_raw": f"2024-01-01 12:00:0{i} INFO service started ok"}
+        for i in range(5)
+    ]
+    items = [{"map": r} for r in rows]
+    report = schema_mod.profile_sample(items)
+    by_field = {f["FIELD"]: f for f in report.fields}
+
+    assert by_field["_raw"]["TYPE"] == "unstructured-text"
+    assert report.hint is not None
+    assert "parse regex" in report.hint
+    assert "5/5" in report.hint
+
+
+def test_profile_sample_no_hint_when_token_counts_inconsistent():
+    texts = ["a b c", "a b c d e f g", "x", "one two three four five six seven eight nine"]
+    rows = [
+        {"_messagetime": str(i), "_sourcecategory": "sc", "_sourcehost": "h", "_raw": t}
+        for i, t in enumerate(texts)
+    ]
+    items = [{"map": r} for r in rows]
+    report = schema_mod.profile_sample(items)
+    assert report.hint is None
+
+
+# ---------------------------------------------------------------------------
+# sumosearch schema (CLI)
+# ---------------------------------------------------------------------------
+
+def test_schema_json_raw_table_columns(monkeypatch):
+    rows = [
+        {"_messagetime": "1", "_sourcecategory": "sc", "sourceipaddress": "1.2.3.4",
+         "_raw": jsonlib.dumps({"eventname": "AssumeRole", "os": {"type": "darwin"}})},
+        {"_messagetime": "2", "_sourcecategory": "sc",
+         "_raw": jsonlib.dumps({"eventname": "PutObject", "os": {"type": "darwin"}})},
+    ]
+    client = make_fake_client(run_search=lambda *a, **k: messages_result(rows))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["schema", "_sourcecategory=*cloudtrail*",
+                                   "--from", "-1h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "FIELD" in out.stdout and "PRESENT" in out.stdout and "INDEX-TIME" in out.stdout
+    assert "os.type" in out.stdout
+    assert "eventname" in out.stdout
+    assert "darwin" in out.stdout  # EXAMPLE column
+
+
+def test_schema_appends_limit_to_query(monkeypatch):
+    captured = {}
+
+    def fake_run_search(query, from_time, to_time, **kwargs):
+        captured["query"] = query
+        captured.update(kwargs)
+        return messages_result([])
+
+    client = make_fake_client(run_search=fake_run_search)
+    patch_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["schema", "_sourcecategory=*x*", "--from", "-1h", "--to", "now",
+                             "--n", "10"], env=ENV)
+    assert captured["query"] == "_sourcecategory=*x* | limit 10"
+
+
+def test_schema_default_auto_parsing_is_manual(monkeypatch):
+    captured = {}
+
+    def fake_run_search(query, from_time, to_time, **kwargs):
+        captured.update(kwargs)
+        return messages_result([])
+
+    client = make_fake_client(run_search=fake_run_search)
+    patch_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["schema", "*", "--from", "-1h", "--to", "now"], env=ENV)
+    assert captured["auto_parsing_mode"] == "Manual"
+
+
+def test_schema_auto_parsing_override(monkeypatch):
+    captured = {}
+
+    def fake_run_search(query, from_time, to_time, **kwargs):
+        captured.update(kwargs)
+        return messages_result([])
+
+    client = make_fake_client(run_search=fake_run_search)
+    patch_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["schema", "*", "--from", "-1h", "--to", "now",
+                             "--auto-parsing", "autoparse"], env=ENV)
+    assert captured["auto_parsing_mode"] == "AutoParse"
+
+
+def test_schema_invalid_auto_parsing_is_error(monkeypatch):
+    client = make_fake_client(run_search=lambda *a, **k: messages_result([]))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["schema", "*", "--from", "-1h", "--to", "now",
+                                   "--auto-parsing", "bogus"], env=ENV)
+    assert out.exit_code == 1
+    assert "Invalid --auto-parsing" in out.output
+
+
+def test_schema_non_json_raw_fallback_and_hint(monkeypatch):
+    rows = [
+        {"_messagetime": str(i), "_sourcecategory": "otel/mac", "_sourcehost": "h",
+         "_raw": f"2024-01-01 12:00:0{i} INFO service started ok"}
+        for i in range(5)
+    ]
+    client = make_fake_client(run_search=lambda *a, **k: messages_result(rows))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["schema", '_sourceCategory="otel/mac"',
+                                   "--from", "-24h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "unstructured-text" in out.stdout
+    assert "parse regex" in out.stdout
+
+
+# ---------------------------------------------------------------------------
+# sumosearch sample (CLI)
+# ---------------------------------------------------------------------------
+
+def test_sample_messages_default_ndjson(monkeypatch):
+    rows = [
+        {"_messagetime": "1", "_sourcecategory": "sc", "_sourcehost": "h", "_raw": "line1", "extra": "x"},
+    ]
+    client = make_fake_client(run_search=lambda *a, **k: messages_result(rows))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["sample", "*", "--from", "-1h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    line = jsonlib.loads(out.stdout.strip())
+    assert set(line) == {"_messagetime", "_sourcecategory", "_sourcehost", "_raw"}
+    assert line["_raw"] == "line1"
+
+
+def test_sample_records_default_csv(monkeypatch):
+    rows = [{"_count": "3", "host": "a"}]
+    client = make_fake_client(run_search=lambda *a, **k: records_result(rows))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["sample", "* | count by host", "--from", "-1h", "--to", "now"],
+                        env=ENV)
+    assert out.exit_code == 0, out.output
+    lines = out.stdout.strip().splitlines()
+    assert lines[0] == "_count,host"
+    assert "3,a" in lines[1]
+
+
+def test_sample_appends_limit_to_query(monkeypatch):
+    captured = {}
+
+    def fake_run_search(query, from_time, to_time, **kwargs):
+        captured["query"] = query
+        return records_result([])
+
+    client = make_fake_client(run_search=fake_run_search)
+    patch_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["sample", "*", "--from", "-1h", "--to", "now", "--n", "7"], env=ENV)
+    assert captured["query"] == "* | limit 7"
+
+
+def test_sample_drop_null_columns(monkeypatch):
+    rows = [
+        {"host": "a", "empty_field": "", "count": "1"},
+        {"host": "b", "empty_field": None, "count": "2"},
+    ]
+    client = make_fake_client(run_search=lambda *a, **k: records_result(rows))
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["sample", "*", "--from", "-1h", "--to", "now",
                                    "--drop-null-columns"], env=ENV)
     assert out.exit_code == 0, out.output
     header = out.stdout.strip().splitlines()[0]

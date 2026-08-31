@@ -4,8 +4,10 @@ cli/main.py — sumosearch, a thin typer CLI over sumo_search_client.py.
 Phase 1: `search run/estimate/count` and `discover partitions/fers/views`,
 with csv/ndjson/json/table output formats, client-side field projection
 for `messages` results, a stderr token-budget warning, `--max-tokens`
-truncation, and `--drop-null-columns`. Later phases add `schema`,
-`sample`, and `export` — see docs/dev/agent-cli-analysis-and-plan.md.
+truncation, and `--drop-null-columns`. Phase 2 adds `schema` (profiling
+logic lives in cli/schema.py; this module just wires up the command) and
+`sample`. `export` is a later phase — see
+docs/dev/agent-cli-analysis-and-plan.md.
 
 Credentials are resolved from the environment (`SUMO_ACCESS_ID`,
 `SUMO_ACCESS_KEY`, `SUMO_ENDPOINT`) by default, since this project
@@ -21,7 +23,9 @@ import json
 import typer
 
 from cli import formats
+from cli import schema as schema_mod
 from sumo_search_client import (
+    SearchJobResult,
     SumoSearchClient,
     SumoSearchError,
     estimate_count,
@@ -92,6 +96,27 @@ def _validate_format(output_format: str) -> None:
             err=True,
         )
         raise typer.Exit(code=1)
+
+
+def _render_output(
+    result: SearchJobResult, rows: list[dict], columns: list[str], is_messages: bool, fmt: str,
+) -> str:
+    """Shared json/ndjson/csv/table dispatch for an already-projected
+    `rows`/`columns` pair from a `messages`/`records` SearchJobResult —
+    factored out of `search run` so `sample` can reuse it without also
+    inheriting `--fields`/`--max-tokens`, which it doesn't take."""
+    if fmt == "json":
+        items = rows if is_messages else [formats.select_columns(r, columns) for r in rows]
+        envelope = {
+            "result_type": result.result_type,
+            "total": result.total,
+            "truncated": result.truncated,
+            "items": items,
+        }
+        return json.dumps(envelope)
+    if fmt == "ndjson":
+        return formats.render_ndjson(rows, None if is_messages else columns)
+    return formats.render_by_format(rows, columns, fmt)
 
 
 def _warn_if_over_budget(output: str, no_warn: bool) -> None:
@@ -205,19 +230,7 @@ def search_run(
             columns = formats.union_columns(subset, field_list)
             if drop_null_columns:
                 columns = formats.drop_null_columns(subset, columns)
-
-        if fmt == "json":
-            items = subset if is_messages else [formats.select_columns(r, columns) for r in subset]
-            envelope = {
-                "result_type": result.result_type,
-                "total": result.total,
-                "truncated": result.truncated,
-                "items": items,
-            }
-            return json.dumps(envelope)
-        if fmt == "ndjson":
-            return formats.render_ndjson(subset, None if is_messages else columns)
-        return formats.render_by_format(subset, columns, fmt)
+        return _render_output(result, subset, columns, is_messages, fmt)
 
     dropped = 0
     if max_tokens is not None and is_messages:
@@ -278,6 +291,96 @@ def search_count(
         raise typer.Exit(code=1) from exc
 
     typer.echo(str(total))
+
+
+# ---------------------------------------------------------------------------
+# schema / sample
+# ---------------------------------------------------------------------------
+
+@app.command("schema")
+def schema_cmd(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Sumo Logic search query to profile."),
+    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
+    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    n: int = typer.Option(50, "--n", help="Sample size, appended as `| limit N`."),
+    auto_parsing: str = typer.Option(
+        "manual", "--auto-parsing",
+        help="manual|autoparse (case-insensitive). Default manual — keeps the "
+             "index-time-vs-search-time distinction meaningful; AutoParse would "
+             "pre-flatten JSON server-side and erase it.",
+    ),
+) -> None:
+    """Profile a query's field schema from a small sample: PRESENT/TYPE/CONST/INDEX-TIME/EXAMPLE
+    per field, unioning top-level `map` keys with client-side JSON-parsed `_raw` keys."""
+    key = auto_parsing.strip().lower()
+    if key not in _AUTO_PARSING_MODES:
+        typer.echo(
+            f"Invalid --auto-parsing '{auto_parsing}': expected 'manual' or 'autoparse'.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    auto_parsing_mode = _AUTO_PARSING_MODES[key]
+
+    config: Config = ctx.obj
+    client = _client(config)
+
+    try:
+        result = client.run_search(
+            f"{query} | limit {n}", from_time, to_time,
+            auto_parsing_mode=auto_parsing_mode,
+        )
+    except SumoSearchError as exc:
+        typer.echo(f"Schema profiling failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    report = schema_mod.profile_sample(result.items)
+    typer.echo(schema_mod.render_schema_report(report))
+
+
+@app.command("sample")
+def sample_cmd(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Sumo Logic search query to sample."),
+    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
+    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    n: int = typer.Option(20, "--n", help="Sample size, appended as `| limit N`."),
+    output_format: str | None = typer.Option(
+        None, "--format",
+        help="csv|ndjson|json|table (default: csv for records results, ndjson for messages).",
+    ),
+    drop_null_columns: bool = typer.Option(
+        False, "--drop-null-columns",
+        help="Drop columns that are null/empty across every row (records output only).",
+    ),
+) -> None:
+    """Run `<query> | limit N` and print the raw sample, via the same rendering path as
+    `search run` (no --fields/--max-tokens/--aggregate/--raw/--auto-parsing)."""
+    if output_format is not None:
+        _validate_format(output_format)
+
+    config: Config = ctx.obj
+    client = _client(config)
+
+    try:
+        result = client.run_search(f"{query} | limit {n}", from_time, to_time)
+    except SumoSearchError as exc:
+        typer.echo(f"Sample failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    is_messages = result.result_type == "messages"
+    fmt = output_format or ("ndjson" if is_messages else "csv")
+
+    if is_messages:
+        rows = [formats.project_message_row(item, None) for item in result.items]
+        columns = formats.union_columns(rows, None)
+    else:
+        rows = [item.get("map", {}) for item in result.items]
+        columns = formats.union_columns(rows, None)
+        if drop_null_columns:
+            columns = formats.drop_null_columns(rows, columns)
+
+    typer.echo(_render_output(result, rows, columns, is_messages, fmt))
 
 
 # ---------------------------------------------------------------------------
