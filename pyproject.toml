@@ -1,6 +1,6 @@
 [project]
 name = "sumologic-search-job-api-reference"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standalone reference client, tests, and Agent Skills for the Sumo Logic Search Job REST API"
 readme = "README.md"
 license = "MIT"
