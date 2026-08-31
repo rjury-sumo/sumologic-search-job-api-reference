@@ -38,8 +38,10 @@ from sumo_search_client import (
 )
 
 app = typer.Typer(name="sumosearch", help="CLI for the Sumo Logic Search Job API.")
-search_app = typer.Typer(help="Search job commands.")
-discover_app = typer.Typer(help="Read-only discovery commands (no search job created).")
+search_app = typer.Typer(help="Search job commands (run, estimate, count).")
+discover_app = typer.Typer(
+    help="Read-only discovery commands (partitions, fers, views); no search job created."
+)
 app.add_typer(search_app, name="search")
 app.add_typer(discover_app, name="discover")
 
