@@ -265,10 +265,7 @@ never appear in shell history.
 ```text
 sumosearch search run    <query> --from --to [--format] [--fields] [--limit]
                                             [--aggregate|--raw] [--auto-parsing manual|autoparse]
-sumosearch search start  <query> --from --to   # async: create + return job id, no poll
-sumosearch search status <job-id>
-sumosearch search fetch  <job-id> [--format] [--limit]
-sumosearch search delete <job-id>
+                                            [--max-tokens N] [--drop-null-columns]
 sumosearch search estimate <query> --from --to        # estimate_scan()
 sumosearch search count    <query> --from --to        # estimate_count(): one scalar, no format needed
 
@@ -277,7 +274,7 @@ sumosearch discover fers       [--grep KEYWORD] [--format]
 sumosearch discover views      [--grep KEYWORD] [--format]
 
 sumosearch schema <query> --from --to [--n 50] [--auto-parsing manual|autoparse]
-sumosearch sample <query> --from --to [--n 20]
+sumosearch sample <query> --from --to [--n 20] [--drop-null-columns]
 
 sumosearch export <query> --from --to --format csv|json|ndjson --out <file>
     # bulk export straight to disk; uses time_split_search() under the hood
@@ -287,9 +284,15 @@ sumosearch export <query> --from --to --format csv|json|ndjson --out <file>
 ```
 
 `search run` mirrors `run_search()` — the common case, one call,
-create→poll→fetch→delete. `search start`/`status`/`fetch`/`delete` mirror
-the client's manual-control mode, for a long job an agent wants to poll
-between other work rather than block a single call on.
+create→poll→fetch→delete — and is the only job-lifecycle command in v1,
+following Sumo MCP's own move to a single atomic `runSearchJob` tool
+over a per-endpoint surface (§10). The client's manual-control mode
+(`create_search_job()`/`get_search_job_status()`/etc.) is not exposed as
+separate `start`/`status`/`fetch`/`delete` subcommands for now — parked
+as a future enhancement for long-running jobs, where polling status
+between other work and reading the histogram-bucket data job-status
+responses expose would let an agent stop a job early to manage its own
+token budget (§10).
 
 ### 6.2 `sumosearch schema` — operationalizing `discovery-profile-scope`, safely
 
@@ -355,11 +358,25 @@ errorcode              6/50    string     no      yes          AccessDenied
   trusted to have worked.
 - **Stderr token-budget warning, not a hard limit.** Every command that
   writes a result to stdout estimates output size (`len//4`) and, past a
-  configurable threshold (default ~4,000 tokens), prints one line to
-  **stderr**: `warning: response is ~9,100 tokens — consider an aggregate
-  query, a tighter | limit, or | fields`. Stderr, not stdout, so it never
-  pollutes the payload an agent parses, but it's visible in a Claude
-  Code-style transcript. `--no-warn` suppresses it for scripted/human use.
+  configurable threshold (default ~4,000 tokens, tunable — §10), prints
+  one line to **stderr**: `warning: response is ~9,100 tokens — consider
+  an aggregate query, a tighter | limit, or | fields`. Stderr, not
+  stdout, so it never pollutes the payload an agent parses, but it's
+  visible in a Claude Code-style transcript. `--no-warn` suppresses it
+  for scripted/human use.
+- **`--max-tokens N`** — a hard client-side cap, independent of the
+  warning above (§10): truncates `messages`/raw output to whatever whole
+  rows fit under N tokens (never mid-record) and reports how many rows
+  were dropped. Gives an agent a lever to bound response size up front
+  instead of only reacting to the stderr warning after the full result
+  already came back.
+- **`--drop-null-columns`** (table/csv/records output, §10) — drop any
+  column that is null/empty across every row of the *current* result
+  before rendering. Complementary to client-side field projection (§4
+  finding 3): projection picks fields by name up front; this drops
+  columns that turned out to be uniformly empty for this particular
+  query/time range — relevant because org field catalogs commonly run
+  to hundreds of sparsely-populated fields (§4 finding 4, §10).
 
 ### 6.4 Config resolution
 
@@ -432,13 +449,12 @@ tests/
                               # tests/integration_test_sumo_search_client.py
 ```
 
-**Naming:** proposing `sumosearch` as the binary name, deliberately
-*not* `sumo` — the integration test file already documents a separate,
-unrelated internal `sumo` CLI with its own `~/.sumo/.env` config; reusing
-that name would confuse the two and violate this repo's "must stand alone,
-no ties to any internal CLI" invariant (`AGENTS.md`). Open to a different
-name; this is the one point in this plan I'd flag as worth a second look
-before implementation starts.
+**Naming:** `sumosearch`, confirmed (§10) as the binary name —
+deliberately *not* `sumo`, since the integration test file already
+documents a separate, unrelated internal `sumo` CLI with its own
+`~/.sumo/.env` config; reusing that name would confuse the two and
+violate this repo's "must stand alone, no ties to any internal CLI"
+invariant (`AGENTS.md`).
 
 ## 9. Phased implementation plan
 
@@ -449,9 +465,9 @@ before implementation starts.
 
 ### Phase 1 — core commands + formats
 
-- `search start/status/fetch/delete/estimate/count`.
+- `search run/estimate/count` — single atomic job command per §10 (no separate `start`/`status`/`fetch`/`delete` in v1).
 - `discover partitions/fers/views` with `--grep`.
-- csv/ndjson/table formats, client-side field projection for `messages` (§6.3), and the stderr token-budget warning.
+- csv/ndjson/table formats, client-side field projection for `messages` (§6.3), the stderr token-budget warning, `--max-tokens`, and `--drop-null-columns` (§10).
 - Unit tests mirroring `tests/test_sumo_search_client.py`'s fake-session pattern; `ruff check` clean.
 
 ### Phase 2 — schema & sample
@@ -468,17 +484,20 @@ before implementation starts.
 
 - README "three paths" section update.
 - `skills/discovery-profile-scope/SKILL.md` gets two notes: (a) `sumosearch schema` now automates this workflow, (b) the `_sourceHost`/`_collector` degenerate-identity caveat for OTel/HTTP-collector-fronted sources (§4 finding 6) — the skill content itself doesn't otherwise change, it still needs to teach the *why* for the MCP-tool/manual path.
-- `skills/ai-agent-result-shaping/SKILL.md` gets a caveat on lever 4 (`| fields`): reliable for aggregate/records output, not reliably effective for raw-message output (§3.3) — point at client-side projection (this CLI, or equivalent in a caller's own code) for that path instead.
+- `skills/ai-agent-result-shaping/SKILL.md` gets a caveat on lever 4 (`| fields`): reliable for aggregate/records output, not reliably effective for raw-message output (§3.3) — point at client-side projection (this CLI, or equivalent in a caller's own code) for that path instead. Also note (§10) that the sparse-explosion behavior generalizes with an account's FER/field-catalog size, not just this sandbox org.
 - `AGENTS.md` gets a `cli/` bullet under "Layout & invariants".
 - `CHANGELOG.md` entry.
 
 ### Deferred
 
-Phase 2-of-this-doc (§7, local cache + `duckdb` query) — revisit after Phase 4 ships and real usage shows whether it's needed.
+- Phase 2-of-this-doc (§7, local cache + `duckdb` query) — revisit after Phase 4 ships and real usage shows whether it's needed.
+- Async job management — `search start`/`status`/`fetch`/`delete` as separate subcommands, plus surfacing histogram-bucket data from job-status responses (§10) — v1 ships a single atomic `search run` only, mirroring Sumo MCP's `runSearchJob`. Revisit for long-running (>10min) jobs where an agent needs to poll completion state and stop a job early to manage its own token budget.
 
-## 10. Open questions
+## 10. Decisions
 
-1. **Binary name** (`sumosearch` proposed, §8) — confirm before implementation, it's the one externally-visible naming decision.
-2. **Async job ergonomics** — is `search start`/`status`/`fetch` actually going to get used by an agent (most harnesses are fine blocking on one bash call for a ≤10min job), or is it YAGNI for v1 and `search run` alone is enough? Leaning toward including it since it's a thin wrapper over methods the client already exposes, but flagging since it's the one part of §6.1 without empirical backing from §2/§3's data.
-3. **Token-warning threshold** (§6.3 default ~4,000) — arbitrary starting point; worth tuning once Phase 1 is in real use rather than picking a "correct" number now.
-4. **Is the `| fields`/`json auto` sparse-explosion (§3.2, §3.3) org-specific or general Sumo Logic behavior?** Only tested against one sandbox org's FER catalog size. Worth a note in whatever Phase 4 doc update addresses it that this scales with the account's own field catalog — an account with few FERs may not see it — rather than stating it as a universal Sumo Logic API property.
+Open questions from the original draft, resolved 2026-08-31:
+
+1. **Binary name: confirmed `sumosearch`** (§8). No further discussion needed before implementation.
+2. **Async job ergonomics: deferred — v1 ships `search run` only.** Sumo's own MCP tooling moved from per-endpoint tools to a single atomic `runSearchJob` after finding a per-endpoint surface overly complex; this CLI follows that precedent for simplicity. `search start`/`status`/`fetch`/`delete` are cut from v1 (§6.1, §9) and parked as a future enhancement for long-running jobs, where an agent polls completion state and reads the histogram-bucket data job-status responses expose, and can stop a job early to stay within a token budget.
+3. **Token-warning threshold ships as designed (~4,000, tunable), plus a client-side truncation control.** Alongside the stderr warning, v1 adds `--max-tokens N` (§6.3): a hard client-side cap that truncates `messages` output to whole rows only (never mid-record), so an agent can bound response size directly instead of only reacting to a warning after the full result already came back.
+4. **The `| fields`/`json auto` sparse-explosion (§3.2, §3.3) is general Sumo Logic behavior, not sandbox-specific.** Every org defines its own set of fields (via FERs or admin config) usable as HTTPS POST fields, and large orgs commonly have 500+ of them — any in-query mechanism that unions the account's full field catalog will produce a wide, mostly-empty result for any single row, regardless of org. Phase 4 docs (§9) should state this as a general property that scales with account field-catalog size, not a one-org artifact. v1 also adds `--drop-null-columns` (§6.3) — drop columns that are null/empty across every row of the current result — as a second, complementary lever alongside client-side field projection (§4 finding 3).
