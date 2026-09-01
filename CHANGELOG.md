@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Documented the scan-ratio pitfall for automated/scheduled searches
+  (window vs. run interval) and scheduled views as the fix for recurring
+  overlapping queries, in the README and
+  `skills/search-job-api-best-practices/SKILL.md`.
+- Added `docs/workshop-log-search-journey.md`, a slide-content outline for
+  a workshop on the log search journey and agentic Search Job API/MCP
+  integration.
+
 ## [0.2.0] - 2026-08-31
 
 ### Added

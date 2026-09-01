@@ -7,9 +7,10 @@ description: >
   Use when writing or reviewing any script/client that talks to
   /api/v1/search/jobs — including debugging 429 rate-limit errors, a search
   job that hangs, times out, or silently returns 0 results, exporting more
-  than 100k log messages, or multiple scripts/services sharing one Sumo
-  Logic access key. Paired with `sumo_search_client.py` two directories up
-  (repo root), which implements every practice below.
+  than 100k log messages, multiple scripts/services sharing one Sumo Logic
+  access key, or designing a scheduled/cron-driven search automation.
+  Paired with `sumo_search_client.py` two directories up (repo root), which
+  implements every practice below.
 ---
 
 # Sumo Logic Search Job API — Best Practices
@@ -176,6 +177,31 @@ When a raw-message export could exceed 100,000 messages:
    window rather than silently accepting truncated data.
 5. Records-only exports don't need this — paginate a single job to
    exhaustion instead.
+
+## Automated/Scheduled Callers: Match Frequency to Time Range
+
+Vibe-coded automations make it trivial to wrap a search in a cron loop —
+but it's just as easy to pick the query's time window and the loop
+interval independently, without noticing the overlap between consecutive
+runs.
+
+- **Scan ratio = window ÷ interval.** A query over the last 3 hours,
+  triggered every minute, rescans the same 3 hours of data on every run —
+  a scan ratio of **180x** the data actually needed for a fresh answer.
+- On **Flex** or **Infrequent** tier, that ratio is a direct multiplier on
+  billed credits. On any tier, it's unnecessary scan load on the account,
+  competing with every other job sharing the same rate limits.
+- **Keep the scan ratio near 1x** by matching interval to window: last 1
+  hour → run hourly; last 15 minutes → run every 15 minutes. Widening the
+  window without slowing the interval (or speeding up the interval without
+  shrinking the window) is the mistake to catch in review.
+- **If a recurring aggregate genuinely needs to run more often than its
+  own window** (e.g. a near-real-time rolling dashboard), don't solve it
+  by re-scanning raw logs faster — put a **scheduled view** behind it
+  instead. A scheduled view pre-aggregates continuously in the background
+  and stores results under its own `_view=` partition, so each search job
+  reads already-computed rows rather than re-scanning raw data on every
+  call — see `scheduled-views-overview` (sibling skill).
 
 ## Other Gotchas
 
