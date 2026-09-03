@@ -26,7 +26,7 @@ sumosearch = "cli.main:app"
 include = ["cli*"]
 
 [tool.setuptools]
-py-modules = ["sumo_search_client"]
+py-modules = ["sumo_search_client", "sumo_dashboard_client"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
