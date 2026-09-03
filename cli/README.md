@@ -9,14 +9,32 @@ compares to the Python client and Sumo's official `runSearchJob` MCP tool
 
 ## Install
 
+As an isolated tool, on its own PATH entry (recommended for end use):
+
+```bash
+uv tool install . --with typer --with pyyaml     # installs the `sumosearch` command on your PATH
+
+# after pulling new commits, reinstall to pick up the changes:
+uv tool install . --with typer --with pyyaml --force
+```
+
+`--with typer --with pyyaml` is required — `uv tool install` does not pull
+in this project's opt-in `cli` dependency group on its own, and omitting
+either one fails at import time (`ModuleNotFoundError: No module named
+'typer'` or `'yaml'`), not at install time.
+
+Working inside a checkout of this repo instead (e.g. for development)?
+
 ```bash
 uv sync --group cli
 ```
 
-`typer` (the only CLI dependency) lives in its own `cli` dependency group,
-separate from `--group dev`. `sumo_search_client.py` stays a
-zero-extra-dependency, copy-paste file for consumers who only want the
-Python client — installing the CLI never pulls `typer` into that path.
+This reads the `cli` dependency group (`typer` + `pyyaml`, both required —
+`pyyaml` backs `cli/instances.py`'s named-instance config) directly from
+`pyproject.toml`, separate from `--group dev`. Either way,
+`sumo_search_client.py` stays a zero-extra-dependency, copy-paste file for
+consumers who only want the Python client — installing the CLI never pulls
+these into that path.
 
 ## Credentials
 
