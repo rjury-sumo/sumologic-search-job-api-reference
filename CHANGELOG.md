@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also accepts a case-insensitive region alias (`us1`, `us2`, `au`, `ca`,
   `de`, `eu`, `fed`, `in`, `jp`, `kr`) in addition to a full endpoint URL.
 - `cli` dependency group now also installs `pyyaml`, for the instance
-  config file.
+  config file. `uv tool install` users need `--with pyyaml` alongside
+  `--with typer` — the README's install snippet is updated accordingly.
 
 ### Documentation
 

@@ -194,13 +194,13 @@ The CLI doesn't replace either existing path — it's the missing third leg for 
 Install `sumosearch` as an isolated tool, on its own PATH entry, from the root of this repo:
 
 ```bash
-uv tool install . --with typer     # installs the `sumosearch` command on your PATH
+uv tool install . --with typer --with pyyaml     # installs the `sumosearch` command on your PATH
 
 # after pulling new commits, reinstall to pick up the changes:
-uv tool install . --with typer --force
+uv tool install . --with typer --with pyyaml --force
 ```
 
-`--with typer` is needed because `typer` lives in the opt-in `cli` dependency group, which `uv tool install` doesn't pull in on its own.
+`--with typer --with pyyaml` is needed because both live in the opt-in `cli` dependency group, which `uv tool install` doesn't pull in on its own.
 
 Working inside a checkout of this repo instead (e.g. for development)? Use the project-local install shown in [`cli/README.md`](cli/README.md#install):
 
