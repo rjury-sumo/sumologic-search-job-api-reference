@@ -29,7 +29,9 @@ from typer.testing import CliRunner  # noqa: E402
 
 import cli.instances as instances_mod  # noqa: E402
 import cli.main as clim  # noqa: E402
+import cli.report_paths as report_paths_mod  # noqa: E402
 import cli.schema as schema_mod  # noqa: E402
+import sumo_dashboard_client as sdc  # noqa: E402
 import sumo_search_client as ssc  # noqa: E402
 
 runner = CliRunner()
@@ -116,6 +118,34 @@ def messages_result(rows: list[dict], total: int | None = None) -> ssc.SearchJob
         job_id="job-1", result_type="messages", total=total if total is not None else len(items),
         items=items,
     )
+
+
+# ---------------------------------------------------------------------------
+# Fakes for `report` — same shape as make_fake_client/patch_client above,
+# but for SumoDashboardClient.
+# ---------------------------------------------------------------------------
+
+def make_fake_dashboard_client(**method_overrides) -> sdc.SumoDashboardClient:
+    client = sdc.SumoDashboardClient(
+        "test-id", "test-key", "https://api.example.com", session=FakeSession(), min_interval=0.0,
+    )
+    # Sensible defaults so a test only needs to override what it cares about.
+    client.get_dashboard = lambda dashboard_id: {"id": dashboard_id, "title": "Test Dashboard",
+                                                  "variables": [], "panels": []}
+    client.create_report_job = lambda body: "job-1"
+    client.get_report_status = lambda job_id: {"status": "Success", "id": job_id}
+    client.get_report_result = lambda job_id: report_result()
+    for name, fn in method_overrides.items():
+        setattr(client, name, fn)
+    return client
+
+
+def patch_dashboard_client(monkeypatch, client) -> None:
+    monkeypatch.setattr(clim, "SumoDashboardClient", lambda *a, **k: client)
+
+
+def report_result(content: bytes = b"%PDF-fake", content_type: str = "application/pdf") -> sdc.ReportResult:
+    return sdc.ReportResult(job_id="job-1", content=content, content_type=content_type)
 
 
 # ---------------------------------------------------------------------------
@@ -1082,3 +1112,271 @@ def test_missing_credentials_error_mentions_instance_env_vars():
     assert out.exit_code == 1
     assert "SUMO_ACCESS_ID_DEMO" in out.output
     assert "SUMO_ACCESS_KEY_DEMO" in out.output
+
+
+# ---------------------------------------------------------------------------
+# report describe / status
+# ---------------------------------------------------------------------------
+
+def test_report_describe_default_is_summary_level(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1"], env=ENV)
+    assert out.exit_code == 0, out.output
+    payload = jsonlib.loads(out.output)
+    assert payload["id"] == "dash-1"
+    assert "panels" not in payload  # summary level omits the per-panel list
+
+
+def test_report_describe_panels_flag_includes_panel_list(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels"], env=ENV)
+    assert out.exit_code == 0, out.output
+    payload = jsonlib.loads(out.output)
+    assert [p["key"] for p in payload["panels"]] == ["p1"]
+    assert "queries" not in payload["panels"][0]  # panels level, not queries level
+
+
+def test_report_describe_not_found_exits_1(monkeypatch):
+    def raise_not_found(dashboard_id):
+        raise sdc.SumoDashboardError("get dashboard dash-1 failed: HTTP 404 — not found",
+                                     status_code=404)
+
+    client = make_fake_dashboard_client(get_dashboard=raise_not_found)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1"], env=ENV)
+    assert out.exit_code == 1
+    assert "Report describe failed" in out.output
+
+
+def test_report_status_prints_json(monkeypatch):
+    client = make_fake_dashboard_client(
+        get_report_status=lambda job_id: {"status": "InProgress", "id": job_id},
+    )
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "status", "job-1"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert jsonlib.loads(out.output) == {"status": "InProgress", "id": "job-1"}
+
+
+# ---------------------------------------------------------------------------
+# report run
+# ---------------------------------------------------------------------------
+
+def test_report_run_dry_run_creates_no_job(monkeypatch):
+    created = []
+    client = make_fake_dashboard_client(create_report_job=lambda body: created.append(body) or "job-1")
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "run", "dash-1", "--dry-run", "--hours", "1"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert created == []  # no job actually created
+    body = jsonlib.loads(out.output)
+    assert body["template"]["id"] == "dash-1"
+    assert "timeRange" in body["template"]
+
+
+def test_report_run_merges_default_variable_values(monkeypatch, tmp_path):
+    dashboard = {
+        "id": "dash-1", "title": "My Dashboard", "panels": [],
+        "variables": [
+            {"name": "region", "defaultValue": "us-east-1"},
+            {"name": "override_me", "defaultValue": "should-not-appear"},
+        ],
+    }
+    captured = {}
+
+    def capture_body(body):
+        captured["body"] = body
+        return "job-1"
+
+    client = make_fake_dashboard_client(
+        get_dashboard=lambda dashboard_id: dashboard,
+        create_report_job=capture_body,
+    )
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, [
+        "report", "run", "dash-1", "--hours", "1",
+        "--variable", "override_me=explicit-value",
+        "--out", str(tmp_path / "out.pdf"),
+    ], env=ENV)
+    assert out.exit_code == 0, out.output
+    variables = captured["body"]["template"]["variableValues"]["data"]
+    assert variables["region"] == ["us-east-1"]          # dashboard default, unmerged
+    assert variables["override_me"] == ["explicit-value"]  # explicit --variable wins
+
+
+def test_report_run_writes_file_and_prints_summary(monkeypatch, tmp_path):
+    client = make_fake_dashboard_client(get_report_result=lambda job_id: report_result(b"pdf-bytes"))
+    patch_dashboard_client(monkeypatch, client)
+
+    out_file = tmp_path / "out.pdf"
+    out = runner.invoke(clim.app, ["report", "run", "dash-1", "--hours", "1",
+                                   "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert out_file.read_bytes() == b"pdf-bytes"
+    assert "Report saved:" in out.output
+    assert "9 bytes" in out.output
+
+
+def test_report_run_no_out_uses_managed_output_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    dashboard = {"id": "dash-1", "title": "My Cool Dashboard!", "variables": [], "panels": []}
+    client = make_fake_dashboard_client(
+        get_dashboard=lambda dashboard_id: dashboard,
+        get_report_result=lambda job_id: report_result(b"pdf-bytes"),
+    )
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "run", "dash-1", "--hours", "1"], env=ENV)
+    assert out.exit_code == 0, out.output
+
+    files = list((tmp_path / "sumo-search" / "output" / "default" / "report").glob("*.pdf"))
+    assert len(files) == 1
+    assert "my-cool-dashboard" in files[0].name
+
+
+def test_report_run_export_width_out_of_range_exits_1(monkeypatch, tmp_path):
+    client = make_fake_dashboard_client()
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "run", "dash-1", "--export-width", "100",
+                                   "--out", str(tmp_path / "out.pdf")], env=ENV)
+    assert out.exit_code == 1
+    assert "export-width" in out.output
+
+
+def test_report_run_panel_override_requires_preflight(monkeypatch, tmp_path):
+    client = make_fake_dashboard_client()
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, [
+        "report", "run", "dash-1", "--no-preflight",
+        "--panel-override", "p1=collapsed", "--out", str(tmp_path / "out.pdf"),
+    ], env=ENV)
+    assert out.exit_code == 1
+    assert "--panel-override requires preflight" in out.output
+
+
+def test_report_run_unknown_variable_rejected(monkeypatch, tmp_path):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [{"name": "region"}], "panels": []}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, [
+        "report", "run", "dash-1", "--variable", "not_a_real_variable=x",
+        "--out", str(tmp_path / "out.pdf"),
+    ], env=ENV)
+    assert out.exit_code == 1
+    assert "Unknown dashboard variable" in out.output
+
+
+def test_report_run_job_failed_exits_1(monkeypatch, tmp_path):
+    client = make_fake_dashboard_client(
+        get_report_status=lambda job_id: {"status": "Failed", "error": "boom"},
+    )
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "run", "dash-1", "--hours", "1",
+                                   "--out", str(tmp_path / "out.pdf")], env=ENV)
+    assert out.exit_code == 1
+    assert "boom" in out.output
+
+
+# ---------------------------------------------------------------------------
+# report result
+# ---------------------------------------------------------------------------
+
+def test_report_result_writes_file(monkeypatch, tmp_path):
+    client = make_fake_dashboard_client(get_report_result=lambda job_id: report_result(b"result-bytes"))
+    patch_dashboard_client(monkeypatch, client)
+
+    out_file = tmp_path / "result.pdf"
+    out = runner.invoke(clim.app, ["report", "result", "job-1", "--out", str(out_file)], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert out_file.read_bytes() == b"result-bytes"
+
+
+# ---------------------------------------------------------------------------
+# report list / open / cleanup — exercise cli/report_paths.py through the CLI
+# ---------------------------------------------------------------------------
+
+def _write_fake_report(tmp_path, instance: str, filename: str, age_days: float = 0) -> None:
+    import os
+    import time as time_mod
+
+    report_dir = tmp_path / "sumo-search" / "output" / instance / "report"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    path = report_dir / filename
+    path.write_bytes(b"fake-pdf-bytes")
+    if age_days:
+        mtime = time_mod.time() - age_days * 86400
+        os.utime(path, (mtime, mtime))
+
+
+def test_report_list_shows_files_across_instances(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    _write_fake_report(tmp_path, "default", "20260101_000000_dash-a.pdf")
+    _write_fake_report(tmp_path, "demo", "20260102_000000_dash-b.png")
+
+    out = runner.invoke(clim.app, ["report", "list", "--format", "csv"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "20260101_000000_dash-a.pdf" in out.output
+    assert "20260102_000000_dash-b.png" in out.output
+    assert "demo" in out.output
+
+
+def test_report_list_empty_shows_header_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    out = runner.invoke(clim.app, ["report", "list", "--format", "csv"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "file" in out.output  # header row only
+
+
+def test_report_open_no_open_prints_most_recent(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    _write_fake_report(tmp_path, "default", "older.pdf", age_days=2)
+    _write_fake_report(tmp_path, "default", "newer.pdf", age_days=0)
+
+    out = runner.invoke(clim.app, ["report", "open", "--no-open"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "newer.pdf" in out.output
+
+
+def test_report_open_no_files_exits_1(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    out = runner.invoke(clim.app, ["report", "open", "--no-open"], env=ENV)
+    assert out.exit_code == 1
+    assert "no report files found" in out.output
+
+
+def test_report_cleanup_deletes_only_old_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    _write_fake_report(tmp_path, "default", "old.pdf", age_days=40)
+    _write_fake_report(tmp_path, "default", "recent.pdf", age_days=1)
+
+    out = runner.invoke(clim.app, ["report", "cleanup", "--older-than", "30d"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "Deleted 1 file(s)" in out.output
+
+    remaining = report_paths_mod.all_report_files()
+    assert [f.name for f in remaining] == ["recent.pdf"]
+
+
+def test_report_cleanup_invalid_duration_exits_1(monkeypatch, tmp_path):
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
+    out = runner.invoke(clim.app, ["report", "cleanup", "--older-than", "bogus"], env=ENV)
+    assert out.exit_code == 1
+    assert "--older-than" in out.output

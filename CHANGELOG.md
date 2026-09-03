@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
+### Added
+
+- `sumo_dashboard_client.py` — a new standalone client (sibling to
+  `sumo_search_client.py`, zero dependency on it beyond the pure
+  `resolve_time()` helper) for the Sumo Logic Dashboard Report Job API:
+  create -> poll -> fetch a PDF/PNG export of a dashboard.
+- `sumosearch report run/describe/status/result/list/open/cleanup` — the
+  CLI surface for the above. `run` fetches the dashboard first by default
+  and merges its saved variable defaults into `variableValues` before
+  submitting, since the report-job API (unlike its handling of the saved
+  default time range) does not apply them on its own — omitting this
+  silently breaks any panel referencing a `{{variable}}`. Files default to
+  `~/sumo-search/output/<instance>/report/`; `list`/`open`/`cleanup` manage
+  that directory. See `cli/README.md`'s `report run` section for the full
+  flag reference and this gotcha.
+- `cli/dashboard_describe.py` — pure `dashboard dict -> summary dict`
+  functions backing `report describe`, at three levels (`summary`,
+  `--panels`, `--queries`).
+- `tests/integration_test_sumo_dashboard_client.py` — live-API integration
+  tests for `sumo_dashboard_client.py`, mirroring
+  `integration_test_sumo_search_client.py`'s style/conventions.
+
 ## [0.3.0] - 2026-09-04
 
 ### Added

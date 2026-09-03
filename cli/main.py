@@ -24,11 +24,28 @@ from __future__ import annotations
 import json
 import math
 import os
+from datetime import datetime, timezone
+from pathlib import Path
 
 import typer
 
-from cli import formats, instances
+from cli import dashboard_describe, formats, instances, report_paths
 from cli import schema as schema_mod
+from sumo_dashboard_client import (
+    EXPORT_WIDTH_MAX,
+    EXPORT_WIDTH_MIN,
+    SumoDashboardClient,
+    SumoDashboardError,
+    build_report_body,
+    default_variable_values,
+    parse_panel_overrides,
+    parse_variables,
+    poll_report_job,
+    resolve_report_time_range,
+    validate_export_width,
+    validate_panel_overrides,
+    validate_variables,
+)
 from sumo_search_client import (
     SearchJobResult,
     SumoSearchClient,
@@ -49,10 +66,12 @@ instance_app = typer.Typer(
 context_app = typer.Typer(
     help="Get/set the current instance context — like kubectl's current-context."
 )
+report_app = typer.Typer(help="Dashboard PDF/PNG report export.")
 app.add_typer(search_app, name="search")
 app.add_typer(discover_app, name="discover")
 app.add_typer(instance_app, name="instance")
 app.add_typer(context_app, name="context")
+app.add_typer(report_app, name="report")
 
 _AUTO_PARSING_MODES = {"manual": "Manual", "autoparse": "AutoParse"}
 
@@ -72,10 +91,11 @@ EXPORT_FORMATS = ("csv", "ndjson", "json")
 
 
 class Config:
-    def __init__(self, access_id: str, access_key: str, endpoint: str):
+    def __init__(self, access_id: str, access_key: str, endpoint: str, instance_name: str = "default"):
         self.access_id = access_id
         self.access_key = access_key
         self.endpoint = endpoint
+        self.instance_name = instance_name
 
 
 @app.callback()
@@ -167,11 +187,18 @@ def main(
             err=True,
         )
         raise typer.Exit(code=1)
-    ctx.obj = Config(access_id=resolved_id, access_key=resolved_key, endpoint=resolved_endpoint)
+    ctx.obj = Config(
+        access_id=resolved_id, access_key=resolved_key, endpoint=resolved_endpoint,
+        instance_name=active_instance or "default",
+    )
 
 
 def _client(config: Config) -> SumoSearchClient:
     return SumoSearchClient(config.access_id, config.access_key, config.endpoint)
+
+
+def _dashboard_client(config: Config) -> SumoDashboardClient:
+    return SumoDashboardClient(config.access_id, config.access_key, config.endpoint)
 
 
 def _validate_format(output_format: str) -> None:
@@ -757,6 +784,248 @@ def discover_views(
         raise typer.Exit(code=1) from exc
     rows = _grep_filter(rows, grep, ["indexName", "query"])
     _emit_rows(rows, output_format)
+
+
+# ---------------------------------------------------------------------------
+# report run / describe / status / result / list / open / cleanup
+# ---------------------------------------------------------------------------
+
+def _report_output_summary(path: Path, size_bytes: int) -> str:
+    return f"Report saved: {path} ({size_bytes:,} bytes)"
+
+
+@report_app.command("run")
+def report_run(
+    ctx: typer.Context,
+    dashboard_id: str = typer.Argument(..., help="Dashboard id to export."),
+    export_format: str = typer.Option("pdf", "--format", help="pdf|png."),
+    mode: str = typer.Option("snapshot", "--mode", help="snapshot|report-mode."),
+    theme: str | None = typer.Option(
+        None, "--theme", help="light|dark. Default: the dashboard's own saved theme.",
+    ),
+    export_width: int | None = typer.Option(
+        None, "--export-width", help=f"Pixels, {EXPORT_WIDTH_MIN}-{EXPORT_WIDTH_MAX}.",
+    ),
+    timezone_name: str = typer.Option("UTC", "--timezone", help="IANA timezone name."),
+    from_time: str | None = typer.Option(None, "--from", help="Start time (same forms as `search run`)."),
+    to_time: str | None = typer.Option(None, "--to", help="End time (same forms as `search run`)."),
+    hours: float | None = typer.Option(
+        None, "--hours", help="Last N hours, overriding --from/--to.",
+    ),
+    variable: list[str] = typer.Option(
+        [], "--variable", help="NAME=VALUE, repeatable (multi-select variables append).",
+    ),
+    panel_override: list[str] = typer.Option(
+        [], "--panel-override",
+        help="ID=collapsed|expanded, repeatable. Requires preflight (no --no-preflight).",
+    ),
+    out: str | None = typer.Option(
+        None, "--out", help="Output file path (default: managed report directory).",
+    ),
+    timeout: int = typer.Option(180, "--timeout", help="Seconds to wait for the report job."),
+    no_preflight: bool = typer.Option(
+        False, "--no-preflight",
+        help="Skip fetching the dashboard first. Skips default-variable-value merging and "
+             "panel-override/variable validation — only safe when the dashboard has no "
+             "{{variables}} and you pass no --panel-override.",
+    ),
+    open_after: bool = typer.Option(False, "--open", help="Open the file after saving."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preflight and print the report job body; create no job.",
+    ),
+) -> None:
+    """Export a dashboard to PDF/PNG via the async reportJobs API."""
+    try:
+        validate_export_width(export_width)
+    except ValueError as exc:
+        typer.echo(f"Report run failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    config: Config = ctx.obj
+    client = _dashboard_client(config)
+
+    try:
+        user_variables = parse_variables(variable)
+        panel_overrides = parse_panel_overrides(panel_override)
+
+        dashboard_title = None
+        if not no_preflight:
+            dashboard = client.get_dashboard(dashboard_id)
+            dashboard_title = dashboard.get("title")
+            validate_variables(user_variables, dashboard)
+            if panel_overrides:
+                validate_panel_overrides(panel_overrides, dashboard)
+            variables = {**default_variable_values(dashboard), **user_variables}
+        else:
+            if panel_overrides:
+                raise ValueError(
+                    "--panel-override requires preflight to validate the panel id "
+                    "(don't pass --no-preflight)."
+                )
+            variables = user_variables
+
+        time_range, _, _ = resolve_report_time_range(hours, from_time, to_time)
+        body = build_report_body(
+            export_format=export_format, mode=mode, theme=theme, export_width=export_width,
+            timezone_name=timezone_name, dashboard_id=dashboard_id, time_range=time_range,
+            variables=variables, panel_overrides=panel_overrides,
+        )
+
+        if dry_run:
+            typer.echo(json.dumps(body, indent=2))
+            return
+
+        job_id = client.create_report_job(body)
+        poll_report_job(client, job_id, timeout_s=timeout)
+        result = client.get_report_result(job_id)
+    except (SumoDashboardError, ValueError) as exc:
+        typer.echo(f"Report run failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    output_path = Path(out) if out else report_paths.default_output_path(
+        config.instance_name, dashboard_id, dashboard_title, result.ext,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(result.content)
+
+    if open_after:
+        typer.launch(str(output_path))
+
+    typer.echo(_report_output_summary(output_path, len(result.content)))
+
+
+@report_app.command("describe")
+def report_describe(
+    ctx: typer.Context,
+    dashboard_id: str = typer.Argument(..., help="Dashboard id to describe."),
+    panels: bool = typer.Option(False, "--panels", help="Include a per-panel list."),
+    queries: bool = typer.Option(False, "--queries", help="Include each panel's query text (implies --panels)."),
+) -> None:
+    """Summarize a dashboard's shape (time range, variables, panels, queries) without exporting it."""
+    config: Config = ctx.obj
+    client = _dashboard_client(config)
+    try:
+        dashboard = client.get_dashboard(dashboard_id)
+    except SumoDashboardError as exc:
+        typer.echo(f"Report describe failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if queries:
+        summary = dashboard_describe.describe_dashboard_queries(dashboard)
+    elif panels:
+        summary = dashboard_describe.describe_dashboard_panels(dashboard)
+    else:
+        summary = dashboard_describe.summarize_dashboard(dashboard)
+    typer.echo(json.dumps(summary, indent=2))
+
+
+@report_app.command("status")
+def report_status(
+    ctx: typer.Context,
+    job_id: str = typer.Argument(..., help="Report job id."),
+) -> None:
+    """Check a report job's status."""
+    config: Config = ctx.obj
+    client = _dashboard_client(config)
+    try:
+        status = client.get_report_status(job_id)
+    except SumoDashboardError as exc:
+        typer.echo(f"Report status failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(status, indent=2))
+
+
+@report_app.command("result")
+def report_result(
+    ctx: typer.Context,
+    job_id: str = typer.Argument(..., help="Report job id."),
+    out: str | None = typer.Option(
+        None, "--out", help="Output file path (default: managed report directory).",
+    ),
+) -> None:
+    """Fetch an already-completed report job's binary result."""
+    config: Config = ctx.obj
+    client = _dashboard_client(config)
+    try:
+        result = client.get_report_result(job_id)
+    except SumoDashboardError as exc:
+        typer.echo(f"Report result failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    output_path = Path(out) if out else report_paths.default_output_path(
+        config.instance_name, job_id, None, result.ext,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(result.content)
+    typer.echo(_report_output_summary(output_path, len(result.content)))
+
+
+@report_app.command("list")
+def report_list(
+    output_format: str = typer.Option("table", "--format", help="csv|ndjson|json|table."),
+) -> None:
+    """List previously downloaded report files across all instances."""
+    _validate_format(output_format)
+    rows = [
+        {
+            "file": f.name,
+            "path": str(f),
+            "instance": report_paths.instance_from_path(f),
+            "size_bytes": f.stat().st_size,
+        }
+        for f in report_paths.all_report_files()
+    ]
+    columns = ["file", "instance", "size_bytes", "path"]
+    typer.echo(formats.render_by_format(rows, columns, output_format))
+
+
+@report_app.command("open")
+def report_open(
+    file: str | None = typer.Argument(None, help="Path or filename to open (default: most recent report)."),
+    no_open: bool = typer.Option(False, "--no-open", help="Resolve and print the path without opening it."),
+) -> None:
+    """Open a downloaded report file (defaults to the most recently saved one)."""
+    if file:
+        candidate = Path(file)
+        if not candidate.is_file():
+            matches = [f for f in report_paths.all_report_files() if f.name == file]
+            if not matches:
+                typer.echo(f"Report open failed: no file matches {file!r}.", err=True)
+                raise typer.Exit(code=1)
+            candidate = matches[0]
+    else:
+        files = report_paths.all_report_files()
+        if not files:
+            typer.echo("Report open failed: no report files found.", err=True)
+            raise typer.Exit(code=1)
+        candidate = files[0]
+
+    if not no_open:
+        typer.launch(str(candidate))
+    typer.echo(str(candidate))
+
+
+@report_app.command("cleanup")
+def report_cleanup(
+    older_than: str = typer.Option("30d", "--older-than", help="e.g. 30d, 12h, 90m."),
+) -> None:
+    """Delete downloaded report files older than the given duration."""
+    try:
+        max_age = report_paths.parse_cleanup_duration(older_than)
+    except ValueError as exc:
+        typer.echo(f"Report cleanup failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    cutoff = datetime.now(timezone.utc) - max_age
+    deleted = 0
+    bytes_freed = 0
+    for f in report_paths.all_report_files():
+        mtime = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+        if mtime < cutoff:
+            bytes_freed += f.stat().st_size
+            f.unlink()
+            deleted += 1
+    typer.echo(f"Deleted {deleted} file(s), freed {bytes_freed:,} bytes.")
 
 
 if __name__ == "__main__":

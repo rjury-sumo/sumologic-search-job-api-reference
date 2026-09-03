@@ -101,8 +101,9 @@ uv run sumosearch --instance demo search count '_sourceCategory=prod/app' --from
 Structure, verified against `cli/main.py`: `run`/`estimate`/`count` nest
 under `search`; `partitions`/`fers`/`views` nest under `discover`;
 `add`/`list`/`remove`/`show` nest under `instance`; `set`/`show`/`unset`
-nest under `context`; `schema`, `sample`, and `export` are top-level
-commands (not nested under anything).
+nest under `context`; `run`/`describe`/`status`/`result`/`list`/`open`/
+`cleanup` nest under `report`; `schema`, `sample`, and `export` are
+top-level commands (not nested under anything).
 
 ### `search run`
 
@@ -214,6 +215,90 @@ uv run sumosearch export '_sourceCategory=prod/app error' --from -24h --to now \
 Never prints exported data to stdout — only a one-line completion summary
 (`wrote N rows to <path> (...)`). See [Export time-splitting](#export-time-splitting)
 below for the auto-split behavior.
+
+### `report run`
+
+Export a dashboard to PDF/PNG via the async `dashboards/reportJobs` API
+(`sumo_dashboard_client.py`, a separate client from `sumo_search_client.py`
+— this is a different endpoint, not a search job).
+
+```bash
+uv run sumosearch report run <dashboard-id> --hours 24 --format pdf
+```
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--format` | `pdf` | `pdf\|png` |
+| `--mode` | `snapshot` | `snapshot\|report-mode` |
+| `--theme` | dashboard's own saved theme | `light\|dark` |
+| `--export-width` | none | pixels, `1500`-`6000` — validated client-side; the API's 400 on an out-of-range value isn't descriptive |
+| `--timezone` | `UTC` | IANA timezone name |
+| `--from` / `--to` | none | same forms as `search run`; omit both to use the dashboard's own saved default time range |
+| `--hours` | none | last N hours, overrides `--from`/`--to` |
+| `--variable NAME=VALUE` | none | repeatable — multi-select variables append; explicit values win over the dashboard's own saved defaults (see below) |
+| `--panel-override ID=collapsed\|expanded` | none | repeatable — collapse/expand a `CollapsiblePanel` section; requires preflight |
+| `--out` | managed output directory | explicit output file path |
+| `--timeout` | `180` | seconds to wait for the report job |
+| `--no-preflight` | off | skip fetching the dashboard first — see the gotcha below before using this |
+| `--open` | off | open the file after saving (cross-platform, via Click's `launch()`) |
+| `--dry-run` | off | preflight and print the report job body; create no job |
+
+**Gotcha — default variable values are not automatic.** The report-job API
+applies a dashboard's saved default *time range* automatically when
+`--from`/`--to`/`--hours` are all omitted, but does **not** apply saved
+default *variable values* the same way: omitting a `{{var}}`'s value
+entirely renders that panel as "Something went wrong", with no error at the
+job-status level. `report run` closes this gap by fetching the dashboard
+(unless `--no-preflight`) and merging each variable's own `defaultValue` in
+before submitting — explicit `--variable` still wins per-name. Only pass
+`--no-preflight` for a dashboard you know has no `{{variables}}`.
+
+Files are written under `~/sumo-search/output/<instance>/report/` by
+default (see `report list`/`open`/`cleanup` below) — pass `--out` for an
+explicit path instead.
+
+### `report describe`
+
+```bash
+uv run sumosearch report describe <dashboard-id> [--panels] [--queries]
+```
+
+Summarizes a dashboard's shape without exporting it: time range, variables
+(with their saved defaults), panel count/types, and layout grid at the
+default "summary" level; add `--panels` for a per-panel list (id, key,
+title, type, `{{var}}` references, grid position — collapsible sections
+nest their member panels under a `children` list); `--queries` implies
+`--panels` and adds each panel's actual query text. Pure JSON output, no
+`--format` flag.
+
+### `report status` / `report result`
+
+```bash
+uv run sumosearch report status <job-id>
+uv run sumosearch report result <job-id> --out result.pdf
+```
+
+Check an in-flight report job's status, or fetch an already-completed job's
+binary result directly (useful if `report run` was interrupted after job
+creation). `result` takes the same `--out` default as `run`.
+
+### `report list` / `report open` / `report cleanup`
+
+```bash
+uv run sumosearch report list --format table
+uv run sumosearch report open                  # opens the most recent report
+uv run sumosearch report open my-report.pdf     # opens a specific file by name
+uv run sumosearch report cleanup --older-than 30d
+```
+
+`list` shows every file under the managed output directory across all
+instances (`--format csv|ndjson|json|table`, default `table`). `open`
+resolves a path or bare filename (searching every instance's report
+directory) or defaults to the most recently saved file, then opens it via
+Click's cross-platform `launch()`; `--no-open` resolves and prints the path
+without opening it. `cleanup --older-than` (default `30d`; also accepts
+`h`/`m`) deletes files older than the given duration and reports the count
+and bytes freed.
 
 ## Output formats
 
@@ -348,6 +433,13 @@ $ echo $?
 `time_split_search()`'s `ValueError` (e.g. an `--interval-hours` too small
 for the window) the same way, with a hint to try a larger explicit
 `--interval-hours`.
+
+`report *` commands follow the same pattern against `SumoDashboardError`
+(`sumo_dashboard_client.py`'s equivalent of `SumoSearchError`) plus
+`ValueError` for client-side validation failures (bad `--export-width`,
+unknown `--variable`/`--panel-override` names, `--panel-override` combined
+with `--no-preflight`, a malformed `--older-than`) — same one-line `<Verb>
+failed: <message>` plus exit code 1, no traceback.
 
 ## Full flag reference
 
