@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
 
 import typer
 
-from cli import formats
+from cli import formats, instances
 from cli import schema as schema_mod
 from sumo_search_client import (
     SearchJobResult,
@@ -42,8 +43,16 @@ search_app = typer.Typer(help="Search job commands (run, estimate, count).")
 discover_app = typer.Typer(
     help="Read-only discovery commands (partitions, fers, views); no search job created."
 )
+instance_app = typer.Typer(
+    help="Manage named instances (endpoint + optional description; no credentials stored)."
+)
+context_app = typer.Typer(
+    help="Get/set the current instance context — like kubectl's current-context."
+)
 app.add_typer(search_app, name="search")
 app.add_typer(discover_app, name="discover")
+app.add_typer(instance_app, name="instance")
+app.add_typer(context_app, name="context")
 
 _AUTO_PARSING_MODES = {"manual": "Manual", "autoparse": "AutoParse"}
 
@@ -73,36 +82,92 @@ class Config:
 def main(
     ctx: typer.Context,
     access_id: str | None = typer.Option(
-        None, "--access-id", envvar="SUMO_ACCESS_ID",
-        help="Sumo Logic access ID (default: SUMO_ACCESS_ID env var).",
+        None, "--access-id",
+        help="Sumo Logic access ID (default: SUMO_ACCESS_ID, or "
+             "SUMO_ACCESS_ID_<INSTANCE> when --instance/a context is active).",
     ),
     access_key: str | None = typer.Option(
-        None, "--access-key", envvar="SUMO_ACCESS_KEY",
-        help="Sumo Logic access key (default: SUMO_ACCESS_KEY env var).",
+        None, "--access-key",
+        help="Sumo Logic access key (default: SUMO_ACCESS_KEY, or "
+             "SUMO_ACCESS_KEY_<INSTANCE> when --instance/a context is active).",
     ),
     endpoint: str | None = typer.Option(
-        None, "--endpoint", envvar="SUMO_ENDPOINT",
-        help="Sumo Logic API endpoint, e.g. https://api.us2.sumologic.com "
-             "(default: SUMO_ENDPOINT env var).",
+        None, "--endpoint",
+        help="Region alias (us1, us2, au, ca, de, eu, fed, in, jp, kr; "
+             "case-insensitive) or a full endpoint URL, e.g. "
+             "https://api.us2.sumologic.com (default: SUMO_ENDPOINT, or the "
+             "active instance's stored endpoint).",
+    ),
+    instance: str | None = typer.Option(
+        None, "--instance",
+        help="Use this named instance for this command only, overriding any "
+             "current context set via `sumosearch context set`. Credentials "
+             "come from SUMO_ACCESS_ID_<INSTANCE>/SUMO_ACCESS_KEY_<INSTANCE>.",
     ),
 ) -> None:
     """sumosearch — CLI for the Sumo Logic Search Job API."""
+    if ctx.invoked_subcommand in ("instance", "context"):
+        return
+
+    resolved_id, resolved_key, resolved_endpoint = access_id, access_key, endpoint
+
+    active_instance = instance or instances.get_context()
+    if active_instance and not (resolved_id and resolved_key and resolved_endpoint):
+        record = instances.get_instance(active_instance)
+        if record is None:
+            typer.echo(
+                f"Instance '{active_instance}' is not defined. Add it with "
+                f"`sumosearch instance add {active_instance} --endpoint <endpoint>`, "
+                "or clear the current context with `sumosearch context unset`.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        suffix = instances.env_suffix(active_instance)
+        resolved_id = resolved_id or os.environ.get(f"SUMO_ACCESS_ID_{suffix}")
+        resolved_key = resolved_key or os.environ.get(f"SUMO_ACCESS_KEY_{suffix}")
+        resolved_endpoint = resolved_endpoint or record["endpoint"]
+    elif not active_instance:
+        # No instance in play at all (not via --instance, not via a persisted
+        # context) — only then do plain SUMO_ACCESS_ID/KEY/ENDPOINT apply.
+        # When an instance *is* active, its own SUMO_ACCESS_ID_<NAME>/
+        # SUMO_ACCESS_KEY_<NAME> are the only env-var fallback: silently
+        # reusing the default identity for a different named instance would
+        # defeat the point of naming it.
+        resolved_id = resolved_id or os.environ.get("SUMO_ACCESS_ID")
+        resolved_key = resolved_key or os.environ.get("SUMO_ACCESS_KEY")
+        resolved_endpoint = resolved_endpoint or os.environ.get("SUMO_ENDPOINT")
+
+    if resolved_endpoint:
+        try:
+            resolved_endpoint = instances.resolve_endpoint(resolved_endpoint)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+
     missing = [
         name for name, value in (
-            ("SUMO_ACCESS_ID", access_id),
-            ("SUMO_ACCESS_KEY", access_key),
-            ("SUMO_ENDPOINT", endpoint),
+            ("SUMO_ACCESS_ID", resolved_id),
+            ("SUMO_ACCESS_KEY", resolved_key),
+            ("SUMO_ENDPOINT", resolved_endpoint),
         )
         if not value
     ]
     if missing:
+        instance_hint = ""
+        if active_instance:
+            suffix = instances.env_suffix(active_instance)
+            instance_hint = (
+                f" Instance '{active_instance}' is active — also checked "
+                f"SUMO_ACCESS_ID_{suffix}/SUMO_ACCESS_KEY_{suffix}."
+            )
         typer.echo(
             f"Missing required credentials: {', '.join(missing)}. Set them as "
-            "environment variables, or pass --access-id/--access-key/--endpoint.",
+            "environment variables, or pass --access-id/--access-key/--endpoint."
+            f"{instance_hint}",
             err=True,
         )
         raise typer.Exit(code=1)
-    ctx.obj = Config(access_id=access_id, access_key=access_key, endpoint=endpoint)
+    ctx.obj = Config(access_id=resolved_id, access_key=resolved_key, endpoint=resolved_endpoint)
 
 
 def _client(config: Config) -> SumoSearchClient:
@@ -402,6 +467,115 @@ def sample_cmd(
             columns = formats.drop_null_columns(rows, columns)
 
     typer.echo(_render_output(result, rows, columns, is_messages, fmt))
+
+
+# ---------------------------------------------------------------------------
+# instance / context
+# ---------------------------------------------------------------------------
+
+@instance_app.command("add")
+def instance_add(
+    name: str = typer.Argument(..., help="Instance name, e.g. 'demo'."),
+    endpoint: str = typer.Option(
+        ..., "--endpoint",
+        help="Region alias (us1, us2, au, ca, de, eu, fed, in, jp, kr; "
+             "case-insensitive) or a full endpoint URL.",
+    ),
+    description: str | None = typer.Option(
+        None, "--description", help="Optional free-text description.",
+    ),
+) -> None:
+    """Add (or overwrite) a named instance. Stores endpoint + description only
+    — never credentials. Auth for this instance comes from
+    SUMO_ACCESS_ID_<NAME>/SUMO_ACCESS_KEY_<NAME> env vars, or --access-id/
+    --access-key."""
+    try:
+        record = instances.add_instance(name, endpoint, description)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"instance '{name}' -> {record['endpoint']}")
+
+
+@instance_app.command("list")
+def instance_list() -> None:
+    """List configured instances; '*' marks the current context."""
+    rows = instances.list_instances()
+    if not rows:
+        typer.echo("No instances configured.")
+        return
+    current = instances.get_context()
+    for name, record in rows.items():
+        marker = "*" if name == current else " "
+        desc = f" — {record['description']}" if record.get("description") else ""
+        typer.echo(f"{marker} {name}\t{record['endpoint']}{desc}")
+
+
+@instance_app.command("remove")
+def instance_remove(name: str = typer.Argument(..., help="Instance name to remove.")) -> None:
+    """Remove a named instance. Also clears the current context if it pointed at it."""
+    if not instances.remove_instance(name):
+        typer.echo(f"Instance '{name}' not found.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"removed instance '{name}'")
+
+
+@instance_app.command("show")
+def instance_show(name: str = typer.Argument(..., help="Instance name to show.")) -> None:
+    record = instances.get_instance(name)
+    if record is None:
+        typer.echo(f"Instance '{name}' not found.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"name: {name}")
+    typer.echo(f"endpoint: {record['endpoint']}")
+    if record.get("description"):
+        typer.echo(f"description: {record['description']}")
+    typer.echo(f"current: {name == instances.get_context()}")
+
+
+@context_app.command("set")
+def context_set(
+    name: str = typer.Argument(..., help="Instance name to make current, or 'none' to clear."),
+) -> None:
+    """Persist the current instance context, used by default when no
+    --instance/--access-id/--access-key/--endpoint is passed."""
+    if name.lower() == "none":
+        instances.unset_context()
+        typer.echo("context cleared (using default SUMO_ACCESS_ID/SUMO_ACCESS_KEY/SUMO_ENDPOINT)")
+        return
+    if not instances.set_context(name):
+        typer.echo(
+            f"Instance '{name}' not found. Add it first with "
+            f"`sumosearch instance add {name} --endpoint <endpoint>`.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"context set to '{name}'")
+
+
+@context_app.command("show")
+def context_show() -> None:
+    """Print the current instance context, or that none is set."""
+    current = instances.get_context()
+    if current is None:
+        typer.echo("no context set (using default SUMO_ACCESS_ID/SUMO_ACCESS_KEY/SUMO_ENDPOINT)")
+        return
+    record = instances.get_instance(current)
+    if record is None:
+        typer.echo(
+            f"context is set to '{current}' but that instance no longer exists; "
+            "clear it with `sumosearch context unset`",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    typer.echo(f"{current}\t{record['endpoint']}")
+
+
+@context_app.command("unset")
+def context_unset() -> None:
+    """Clear the current instance context (equivalent to `context set none`)."""
+    instances.unset_context()
+    typer.echo("context cleared (using default SUMO_ACCESS_ID/SUMO_ACCESS_KEY/SUMO_ENDPOINT)")
 
 
 # ---------------------------------------------------------------------------

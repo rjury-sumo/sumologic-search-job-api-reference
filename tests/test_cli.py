@@ -27,6 +27,7 @@ pytest.importorskip("typer")
 
 from typer.testing import CliRunner  # noqa: E402
 
+import cli.instances as instances_mod  # noqa: E402
 import cli.main as clim  # noqa: E402
 import cli.schema as schema_mod  # noqa: E402
 import sumo_search_client as ssc  # noqa: E402
@@ -38,6 +39,14 @@ ENV = {
     "SUMO_ACCESS_KEY": "test-key",
     "SUMO_ENDPOINT": "https://api.example.com",
 }
+
+
+@pytest.fixture(autouse=True)
+def _isolated_instances_config(monkeypatch, tmp_path):
+    """Every command now consults cli.instances (current context lookup) even
+    when --instance isn't passed — point it at a per-test tmp_path so tests
+    never read/write the developer's real ~/sumo-search/config.yaml."""
+    monkeypatch.setattr(instances_mod, "CONFIG_DIR", tmp_path / "sumo-search")
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +86,20 @@ def make_fake_client(**method_overrides) -> ssc.SumoSearchClient:
 
 def patch_client(monkeypatch, client) -> None:
     monkeypatch.setattr(clim, "SumoSearchClient", lambda *a, **k: client)
+
+
+def patch_client_capture(monkeypatch, client) -> dict:
+    """Like patch_client, but also records the (access_id, access_key, endpoint)
+    positional args SumoSearchClient was constructed with, so tests can assert
+    on how --instance/context resolution fed _client()."""
+    captured: dict = {}
+
+    def fake_ctor(*a, **k):
+        captured["args"] = a
+        return client
+
+    monkeypatch.setattr(clim, "SumoSearchClient", fake_ctor)
+    return captured
 
 
 def records_result(rows: list[dict], total: int | None = None) -> ssc.SearchJobResult:
@@ -875,3 +898,187 @@ def test_export_time_split_path_spans_multiple_windows(monkeypatch, tmp_path):
 
     create_calls = [c for c in session.calls if c["method"] == "post" and c["url"].endswith("/search/jobs")]
     assert len(create_calls) == 3  # 1 count job + 2 data-window jobs
+
+
+# ---------------------------------------------------------------------------
+# instance / context
+# ---------------------------------------------------------------------------
+
+def test_instance_add_list_show():
+    out = runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2",
+                                    "--description", "demo org"])
+    assert out.exit_code == 0, out.output
+    assert "demo" in out.output and "https://api.us2.sumologic.com" in out.output
+
+    out = runner.invoke(clim.app, ["instance", "list"])
+    assert out.exit_code == 0, out.output
+    assert "demo" in out.output
+    assert "https://api.us2.sumologic.com" in out.output
+
+    out = runner.invoke(clim.app, ["instance", "show", "demo"])
+    assert out.exit_code == 0, out.output
+    assert "endpoint: https://api.us2.sumologic.com" in out.output
+    assert "description: demo org" in out.output
+
+
+def test_instance_add_rejects_unrecognized_endpoint():
+    out = runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "bogus"])
+    assert out.exit_code == 1
+    assert "Unrecognized endpoint" in out.output
+
+
+def test_instance_add_overwrites_existing():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    out = runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "au"])
+    assert out.exit_code == 0, out.output
+
+    out = runner.invoke(clim.app, ["instance", "show", "demo"])
+    assert "https://api.au.sumologic.com" in out.output
+
+
+def test_instance_remove():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    out = runner.invoke(clim.app, ["instance", "remove", "demo"])
+    assert out.exit_code == 0, out.output
+
+    out = runner.invoke(clim.app, ["instance", "show", "demo"])
+    assert out.exit_code == 1
+
+
+def test_instance_remove_unknown_is_error():
+    out = runner.invoke(clim.app, ["instance", "remove", "nope"])
+    assert out.exit_code == 1
+    assert "not found" in out.output
+
+
+def test_instance_remove_clears_matching_context():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    runner.invoke(clim.app, ["context", "set", "demo"])
+    runner.invoke(clim.app, ["instance", "remove", "demo"])
+
+    out = runner.invoke(clim.app, ["context", "show"])
+    assert "no context set" in out.output
+
+
+def test_context_set_show_unset():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+
+    out = runner.invoke(clim.app, ["context", "set", "demo"])
+    assert out.exit_code == 0, out.output
+
+    out = runner.invoke(clim.app, ["context", "show"])
+    assert out.exit_code == 0, out.output
+    assert "demo" in out.output and "https://api.us2.sumologic.com" in out.output
+
+    out = runner.invoke(clim.app, ["context", "unset"])
+    assert out.exit_code == 0, out.output
+
+    out = runner.invoke(clim.app, ["context", "show"])
+    assert "no context set" in out.output
+
+
+def test_context_set_unknown_instance_is_error():
+    out = runner.invoke(clim.app, ["context", "set", "nope"])
+    assert out.exit_code == 1
+    assert "not found" in out.output
+
+
+def test_context_set_none_clears():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    runner.invoke(clim.app, ["context", "set", "demo"])
+
+    out = runner.invoke(clim.app, ["context", "set", "none"])
+    assert out.exit_code == 0, out.output
+
+    out = runner.invoke(clim.app, ["context", "show"])
+    assert "no context set" in out.output
+
+
+def test_instance_flag_interpolates_credentials_and_endpoint(monkeypatch):
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    env = {"SUMO_ACCESS_ID_DEMO": "demo-id", "SUMO_ACCESS_KEY_DEMO": "demo-key"}
+    out = runner.invoke(clim.app, ["--instance", "demo", "search", "count", "*",
+                                    "--from", "-1h", "--to", "now"], env=env)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("demo-id", "demo-key", "https://api.us2.sumologic.com")
+
+
+def test_instance_flag_env_var_name_uses_uppercased_suffix(monkeypatch):
+    runner.invoke(clim.app, ["instance", "add", "us2-prod", "--endpoint", "us2"])
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    env = {"SUMO_ACCESS_ID_US2_PROD": "prod-id", "SUMO_ACCESS_KEY_US2_PROD": "prod-key"}
+    out = runner.invoke(clim.app, ["--instance", "us2-prod", "search", "count", "*",
+                                    "--from", "-1h", "--to", "now"], env=env)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("prod-id", "prod-key", "https://api.us2.sumologic.com")
+
+
+def test_instance_flag_undefined_instance_is_error():
+    out = runner.invoke(clim.app, ["--instance", "nope", "search", "count", "*",
+                                    "--from", "-1h", "--to", "now"], env={})
+    assert out.exit_code == 1
+    assert "is not defined" in out.output
+
+
+def test_explicit_flags_override_instance(monkeypatch):
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    env = {"SUMO_ACCESS_ID_DEMO": "demo-id", "SUMO_ACCESS_KEY_DEMO": "demo-key"}
+    out = runner.invoke(clim.app, [
+        "--instance", "demo", "--access-id", "explicit-id", "--access-key", "explicit-key",
+        "--endpoint", "eu", "search", "count", "*", "--from", "-1h", "--to", "now",
+    ], env=env)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("explicit-id", "explicit-key", "https://api.eu.sumologic.com")
+
+
+def test_persisted_context_used_without_instance_flag(monkeypatch):
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "au"])
+    runner.invoke(clim.app, ["context", "set", "demo"])
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    env = {"SUMO_ACCESS_ID_DEMO": "demo-id", "SUMO_ACCESS_KEY_DEMO": "demo-key"}
+    out = runner.invoke(clim.app, ["search", "count", "*", "--from", "-1h", "--to", "now"], env=env)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("demo-id", "demo-key", "https://api.au.sumologic.com")
+
+
+def test_default_env_vars_used_when_no_instance_active(monkeypatch):
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["search", "count", "*", "--from", "-1h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("test-id", "test-key", "https://api.example.com")
+
+
+def test_endpoint_flag_accepts_region_alias_case_insensitive(monkeypatch):
+    client = make_fake_client(run_search=lambda *a, **k: records_result([{"_count": "1"}]))
+    captured = patch_client_capture(monkeypatch, client)
+
+    env = {"SUMO_ACCESS_ID": "test-id", "SUMO_ACCESS_KEY": "test-key"}
+    out = runner.invoke(clim.app, ["--endpoint", "AU", "search", "count", "*",
+                                    "--from", "-1h", "--to", "now"], env=env)
+    assert out.exit_code == 0, out.output
+    assert captured["args"] == ("test-id", "test-key", "https://api.au.sumologic.com")
+
+
+def test_missing_credentials_error_mentions_instance_env_vars():
+    runner.invoke(clim.app, ["instance", "add", "demo", "--endpoint", "us2"])
+    # Explicitly unset — see test_missing_credentials_exit_1 for why: the
+    # shell running this suite may itself export SUMO_ACCESS_ID_DEMO/
+    # SUMO_ACCESS_KEY_DEMO (e.g. for live integration testing).
+    no_creds = {"SUMO_ACCESS_ID_DEMO": None, "SUMO_ACCESS_KEY_DEMO": None}
+    out = runner.invoke(clim.app, ["--instance", "demo", "search", "count", "*",
+                                    "--from", "-1h", "--to", "now"], env=no_creds)
+    assert out.exit_code == 1
+    assert "SUMO_ACCESS_ID_DEMO" in out.output
+    assert "SUMO_ACCESS_KEY_DEMO" in out.output

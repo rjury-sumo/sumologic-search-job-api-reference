@@ -30,11 +30,79 @@ you actually want.
 Missing credentials print `Missing required credentials: ...` to stderr and
 exit 1 — no traceback.
 
+### Multiple instances
+
+For talking to more than one Sumo Logic org/deployment, `sumosearch` supports
+named **instances** (endpoint + optional description, kubectl-`context`
+style) stored in `~/sumo-search/config.yaml`. Credentials are never written
+to that file — only endpoint/description are persisted; auth for a named
+instance always comes from suffixed env vars, resolved at the point of use.
+
+```bash
+# register an instance — --endpoint takes a region alias or a full URL
+uv run sumosearch instance add demo --endpoint us2 --description "demo org"
+uv run sumosearch instance list
+uv run sumosearch instance show demo
+uv run sumosearch instance remove demo
+
+# persist a "current" instance, like kubectl's current-context
+uv run sumosearch context set demo
+uv run sumosearch context show
+uv run sumosearch context unset      # same as `context set none`
+```
+
+To use `demo` for one command without changing the persisted context, pass
+`--instance demo`. Either way (via `--instance` or a persisted context),
+credentials for that instance are read from `SUMO_ACCESS_ID_DEMO` /
+`SUMO_ACCESS_KEY_DEMO` — the instance name uppercased, with any non-
+alphanumeric character turned into `_` (e.g. instance `us2-prod` ->
+`SUMO_ACCESS_ID_US2_PROD`):
+
+```bash
+export SUMO_ACCESS_ID_DEMO=...
+export SUMO_ACCESS_KEY_DEMO=...
+uv run sumosearch --instance demo search count '_sourceCategory=prod/app' --from -1h --to now
+```
+
+**Resolution order**, most specific first:
+
+1. `--access-id`/`--access-key`/`--endpoint` on the command line — always win.
+2. `--instance NAME` on the command line, or (if not given) the persisted
+   `context set` instance — credentials from `SUMO_ACCESS_ID_<NAME>`/
+   `SUMO_ACCESS_KEY_<NAME>`, endpoint from that instance's stored config.
+   An active instance does **not** fall back to the plain `SUMO_ACCESS_ID`/
+   `SUMO_ACCESS_KEY` env vars if its own suffixed vars are unset — that
+   would silently reuse the default identity for a different named
+   instance, defeating the point of naming it.
+3. No instance in play at all (no `--instance`, no persisted context): plain
+   `SUMO_ACCESS_ID`/`SUMO_ACCESS_KEY`/`SUMO_ENDPOINT` — unchanged default
+   behavior for anyone not using instances.
+
+### Region aliases
+
+`--endpoint` (on any command, and on `instance add`) accepts either a full
+`https://` URL or a case-insensitive region alias:
+
+| Alias | Endpoint |
+| --- | --- |
+| `us1` | `https://api.sumologic.com` |
+| `us2` | `https://api.us2.sumologic.com` |
+| `au` | `https://api.au.sumologic.com` |
+| `ca` | `https://api.ca.sumologic.com` |
+| `de` | `https://api.de.sumologic.com` |
+| `eu` | `https://api.eu.sumologic.com` |
+| `fed` | `https://api.fed.sumologic.com` |
+| `in` | `https://api.in.sumologic.com` |
+| `jp` | `https://api.jp.sumologic.com` |
+| `kr` | `https://api.kr.sumologic.com` |
+
 ## Command reference
 
 Structure, verified against `cli/main.py`: `run`/`estimate`/`count` nest
-under `search`; `partitions`/`fers`/`views` nest under `discover`; `schema`,
-`sample`, and `export` are top-level commands (not nested under anything).
+under `search`; `partitions`/`fers`/`views` nest under `discover`;
+`add`/`list`/`remove`/`show` nest under `instance`; `set`/`show`/`unset`
+nest under `context`; `schema`, `sample`, and `export` are top-level
+commands (not nested under anything).
 
 ### `search run`
 

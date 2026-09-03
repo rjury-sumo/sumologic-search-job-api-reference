@@ -174,7 +174,18 @@ Region endpoints:
 | US1 | `https://api.sumologic.com` |
 | US2 | `https://api.us2.sumologic.com` |
 | AU | `https://api.au.sumologic.com` |
+| CA | `https://api.ca.sumologic.com` |
+| DE | `https://api.de.sumologic.com` |
 | EU | `https://api.eu.sumologic.com` |
+| FED | `https://api.fed.sumologic.com` |
+| IN | `https://api.in.sumologic.com` |
+| JP | `https://api.jp.sumologic.com` |
+| KR | `https://api.kr.sumologic.com` |
+
+The `sumosearch` CLI accepts these as case-insensitive aliases (`--endpoint
+us2`) — see [`cli/README.md`](cli/README.md#region-aliases) — and can manage
+multiple named instances/contexts across regions/orgs at once, see
+[`cli/README.md`](cli/README.md#multiple-instances).
 
 ## Quickstart: the `sumosearch` CLI
 

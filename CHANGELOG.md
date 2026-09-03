@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-04
+
+### Added
+
+- `sumosearch instance add/list/remove/show` and `sumosearch context
+  set/show/unset` — named, kubectl-context-style instances (endpoint +
+  optional description, persisted in `~/sumo-search/config.yaml`;
+  credentials are never stored) for working across multiple Sumo Logic
+  orgs/regions. Any command accepts `--instance NAME` to use one instance
+  for that invocation, or `context set NAME` to make it the default.
+  Credentials for a named instance are read from
+  `SUMO_ACCESS_ID_<NAME>`/`SUMO_ACCESS_KEY_<NAME>` env vars
+  (name uppercased, non-alphanumeric -> `_`); `--access-id`/`--access-key`/
+  `--endpoint` still override everything. See `cli/README.md#multiple-instances`.
+- `--endpoint` (on any `sumosearch` command, and on `instance add`) now
+  also accepts a case-insensitive region alias (`us1`, `us2`, `au`, `ca`,
+  `de`, `eu`, `fed`, `in`, `jp`, `kr`) in addition to a full endpoint URL.
+- `cli` dependency group now also installs `pyyaml`, for the instance
+  config file.
+
 ### Documentation
 
 - Documented the scan-ratio pitfall for automated/scheduled searches
