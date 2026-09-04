@@ -74,7 +74,7 @@ telemetry). Both surfaced findings that change the plan.
 Raw sample (`_sourceCategory="otel/mac" | limit 10`):
 
 ```text
-2026-08-31 12:18:12+12 rjury-mac Jamf App Installers[21926]: Mozilla Firefox 154.0.1: Change - Apps with similar bundleIdentifier: [name: Firefox, bundleIdentifier: org.mozilla.firefox]
+2026-08-31 12:18:12+12 demo-mac Jamf App Installers[21926]: Mozilla Firefox 154.0.1: Change - Apps with similar bundleIdentifier: [name: Firefox, bundleIdentifier: org.mozilla.firefox]
 ```
 
 27 keys/row. 10 rows: full JSON 10,778 chars (~2,694 tokens) vs. **`_raw`
