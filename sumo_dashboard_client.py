@@ -61,11 +61,20 @@ POLL_INTERVAL_CAP = 10.0
 EXPORT_WIDTH_MIN = 1500
 EXPORT_WIDTH_MAX = 6000
 
+# GET /v2/dashboards pagination page size — the server max, not user-facing.
+DASHBOARD_PAGE_SIZE = 100
+
 # CLI-facing choice strings -> exact API enum strings.
 VALID_FORMATS = {"pdf": "Pdf", "png": "Png"}
 VALID_MODES = {"snapshot": "DashboardTemplate", "report-mode": "DashboardReportModeTemplate"}
 VALID_THEMES = {"light": "Light", "dark": "Dark"}
 VALID_COLLAPSE_STATES = {"collapsed": True, "expanded": False}
+VALID_LIST_MODES = {"all": "allViewableByUser", "mine": "createdByUser"}
+
+# GET /v2/dashboards list items carry no createdAt/modifiedAt/createdBy, and
+# their panels/layout/variables/timeRange/topologyLabelMap can each be tens
+# of KB — project down to what a discovery listing actually needs.
+_DASHBOARD_SUMMARY_FIELDS = ("id", "contentId", "title", "description", "folderId", "domain")
 
 _EXT_FROM_CONTENT_TYPE = {"application/pdf": "pdf", "image/png": "png"}
 
@@ -221,6 +230,36 @@ class SumoDashboardClient:
         return self._request_json("GET", f"/v2/dashboards/{dashboard_id}",
                                   operation=f"get dashboard {dashboard_id}")
 
+    def list_dashboards(self, *, mode: str = "allViewableByUser") -> list[dict]:
+        """GET /v2/dashboards — paginated 100-per-page (the server max)
+        until `next` is null, i.e. the caller's *entire* viewable dashboard
+        list. There is no server-side search/filter param on this endpoint,
+        so a caller wanting to find dashboards by keyword must pull the
+        full list first and filter client-side (see cli's `discover
+        dashboards --grep`, which also caches this call's result to disk —
+        see cli/dashboard_cache.py — since a full-org pull can take a while
+        and dashboards don't change often).
+
+        `mode`: "allViewableByUser" (this client's default) or
+        "createdByUser" (the bare API's own default, own dashboards only).
+
+        Each item is projected via `project_dashboard_summary()` as pages
+        arrive, not accumulated raw — a single dashboard's panels/layout/
+        variables can be tens of KB, and none of that survives to the
+        returned list."""
+        dashboards: list[dict] = []
+        token: str | None = None
+        while True:
+            params = {"limit": DASHBOARD_PAGE_SIZE, "mode": mode}
+            if token:
+                params["token"] = token
+            page = self._request_json("GET", "/v2/dashboards", params=params,
+                                      operation="list dashboards")
+            dashboards.extend(project_dashboard_summary(d) for d in page.get("dashboards", []))
+            token = page.get("next")
+            if not token:
+                return dashboards
+
     def create_report_job(self, body: dict) -> str:
         result = self._request_json("POST", "/v2/dashboards/reportJobs", json_body=body,
                                      operation="create report job")
@@ -243,6 +282,12 @@ class SumoDashboardClient:
 # ---------------------------------------------------------------------------
 # Pure helpers — time range, variables, panel overrides, job body, polling
 # ---------------------------------------------------------------------------
+
+def project_dashboard_summary(dashboard: dict) -> dict:
+    """id/contentId/title/description/folderId/domain only — see
+    `_DASHBOARD_SUMMARY_FIELDS` and `list_dashboards()`."""
+    return {k: dashboard.get(k) for k in _DASHBOARD_SUMMARY_FIELDS}
+
 
 def validate_export_width(width: int | None) -> None:
     if width is not None and not (EXPORT_WIDTH_MIN <= width <= EXPORT_WIDTH_MAX):

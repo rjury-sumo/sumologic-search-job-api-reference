@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-04
+
+### Added
+
+- `sumo_dashboard_client.py`: `list_dashboards()` — paginated
+  `GET /v2/dashboards` (100/page, until the full viewable list is fetched),
+  projecting each item down to `id`/`contentId`/`title`/`description`/
+  `folderId`/`domain` (dropping `panels`/`layout`/`variables`/
+  `topologyLabelMap`, which can be tens of KB per dashboard).
+- `cli/dashboard_cache.py` — on-disk cache for that full pull, one file per
+  instance+mode at `~/sumo-search/output/<instance>/dashboards/list-<mode>.json`,
+  reused for 24h.
+- `sumosearch discover dashboards` — client-side keyword/technology/
+  business-service discovery over that list (`--grep`, `--mode all|mine`,
+  `--limit`, `--no-cache`), since the endpoint has no server-side search
+  param. No `created`/`modified` filter in this v1 — the list endpoint
+  doesn't return those fields.
 
 ### Documentation
 

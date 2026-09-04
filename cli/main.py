@@ -29,11 +29,12 @@ from pathlib import Path
 
 import typer
 
-from cli import dashboard_describe, formats, instances, report_paths
+from cli import dashboard_cache, dashboard_describe, formats, instances, report_paths
 from cli import schema as schema_mod
 from sumo_dashboard_client import (
     EXPORT_WIDTH_MAX,
     EXPORT_WIDTH_MIN,
+    VALID_LIST_MODES,
     SumoDashboardClient,
     SumoDashboardError,
     build_report_body,
@@ -784,6 +785,57 @@ def discover_views(
         raise typer.Exit(code=1) from exc
     rows = _grep_filter(rows, grep, ["indexName", "query"])
     _emit_rows(rows, output_format)
+
+
+@discover_app.command("dashboards")
+def discover_dashboards(
+    ctx: typer.Context,
+    grep: str | None = typer.Option(
+        None, "--grep", help="Case-insensitive substring filter on title/description/domain.",
+    ),
+    mode: str = typer.Option(
+        "all", "--mode", help="all|mine — all viewable dashboards, or only ones you created.",
+    ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache",
+        help="Skip the on-disk cache and pull the full dashboard list fresh from the API "
+             f"(cache is normally reused for {dashboard_cache.DEFAULT_MAX_AGE_HOURS:g}h per "
+             "instance+mode; a fresh pull still refreshes it for next time).",
+    ),
+    limit: int = typer.Option(
+        50, "--limit", help="Cap on the filtered results actually printed.",
+    ),
+    output_format: str = typer.Option("csv", "--format", help="csv|ndjson|json|table."),
+) -> None:
+    """List dashboards (list_dashboards()) — GET /v2/dashboards, no search job created.
+    This endpoint has no server-side search param, so the full dashboard list is pulled
+    once (all pages) and cached to disk per instance+--mode; repeated --grep searches
+    within the cache window reuse it. --grep/--limit are always applied fresh."""
+    key = mode.strip().lower()
+    if key not in VALID_LIST_MODES:
+        typer.echo(f"Invalid --mode '{mode}': expected 'all' or 'mine'.", err=True)
+        raise typer.Exit(code=1)
+
+    config: Config = ctx.obj
+
+    rows = None if no_cache else dashboard_cache.read_cache(config.instance_name, key)
+    if rows is None:
+        client = _dashboard_client(config)
+        try:
+            rows = client.list_dashboards(mode=VALID_LIST_MODES[key])
+        except SumoDashboardError as exc:
+            typer.echo(f"Failed to list dashboards: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        dashboard_cache.write_cache(config.instance_name, key, rows)
+    else:
+        typer.echo(
+            f"note: using cached dashboard list ({dashboard_cache.cache_path(config.instance_name, key)}"
+            f", refresh with --no-cache)",
+            err=True,
+        )
+
+    rows = _grep_filter(rows, grep, ["title", "description", "domain"])
+    _emit_rows(rows[:limit], output_format)
 
 
 # ---------------------------------------------------------------------------

@@ -117,11 +117,11 @@ uv run sumosearch --instance demo search count '_sourceCategory=prod/app' --from
 ## Command reference
 
 Structure, verified against `cli/main.py`: `run`/`estimate`/`count` nest
-under `search`; `partitions`/`fers`/`views` nest under `discover`;
-`add`/`list`/`remove`/`show` nest under `instance`; `set`/`show`/`unset`
-nest under `context`; `run`/`describe`/`status`/`result`/`list`/`open`/
-`cleanup` nest under `report`; `schema`, `sample`, and `export` are
-top-level commands (not nested under anything).
+under `search`; `partitions`/`fers`/`views`/`dashboards` nest under
+`discover`; `add`/`list`/`remove`/`show` nest under `instance`;
+`set`/`show`/`unset` nest under `context`; `run`/`describe`/`status`/
+`result`/`list`/`open`/`cleanup` nest under `report`; `schema`, `sample`,
+and `export` are top-level commands (not nested under anything).
 
 ### `search run`
 
@@ -181,6 +181,46 @@ Each takes `--grep` (case-insensitive substring filter — `name`/
 for FERs, `indexName`/`query` for views) and `--format csv|ndjson|json|table`
 (default `csv`). Each carries the stderr token-budget warning (see below);
 none takes `--no-warn`.
+
+### `discover dashboards`
+
+Find dashboards by keyword, technology, or business service/user journey
+— useful when you know roughly what you're looking for but not the
+dashboard id.
+
+```bash
+uv run sumosearch discover dashboards --grep checkout
+```
+
+`GET /v2/dashboards` has no server-side search parameter, so this pulls the
+*entire* viewable dashboard list (paginated 100/page) and filters
+client-side:
+
+| Flag | Default | Notes |
+| --- | --- | --- |
+| `--grep` | none | case-insensitive substring filter on `title`/`description`/`domain` |
+| `--mode` | `all` | `all\|mine` — `allViewableByUser` vs. `createdByUser` |
+| `--no-cache` | off | skip the on-disk cache and pull fresh (see below) |
+| `--limit` | `50` | cap on the *filtered* results actually printed |
+| `--format` | `csv` | `csv\|ndjson\|json\|table` |
+
+Each dashboard row is projected to `id`, `contentId`, `title`,
+`description`, `folderId`, `domain` — the list endpoint's `panels`/
+`layout`/`variables`/`topologyLabelMap` are dropped (a single dashboard's
+full definition can be tens of KB, and 1000s of them would blow out the
+context window). Note there's no `created`/`modified` filter — the
+`/v2/dashboards` list endpoint doesn't return those fields at all.
+
+**Caching**: a full-org pull can take a while, but dashboards don't change
+often and a caller typically runs several `--grep` searches back to back to
+find what they're after. So the unfiltered list (from `list_dashboards()`)
+is cached to disk at
+`~/sumo-search/output/<instance>/dashboards/list-<mode>.json` and reused
+for 24h before a fresh pull; `--grep`/`--limit` are always applied fresh
+against whatever list — cached or just-pulled — is in hand. Pass
+`--no-cache` to force a fresh pull (which also refreshes the cache for next
+time). The cache is keyed by instance + `--mode`, so `all` and `mine`
+never collide.
 
 ### `schema`
 

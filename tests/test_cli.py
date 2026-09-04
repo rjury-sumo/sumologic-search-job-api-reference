@@ -312,6 +312,161 @@ def test_discover_partitions_no_grep_returns_all(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# discover dashboards
+# ---------------------------------------------------------------------------
+
+def test_discover_dashboards_grep_filters_title_description_domain(monkeypatch):
+    rows = [
+        {"id": "1", "title": "Checkout latency", "description": "", "domain": "Custom"},
+        {"id": "2", "title": "Billing overview", "description": "checkout funnel", "domain": "Custom"},
+        {"id": "3", "title": "Auth errors", "description": "", "domain": "checkout-service"},
+        {"id": "4", "title": "Unrelated", "description": "", "domain": "Custom"},
+    ]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards", "--grep", "checkout"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "Checkout latency" in out.stdout
+    assert "Billing overview" in out.stdout
+    assert "Auth errors" in out.stdout
+    assert "Unrelated" not in out.stdout
+
+
+def test_discover_dashboards_no_grep_returns_all(monkeypatch):
+    rows = [{"id": "1", "title": "a"}, {"id": "2", "title": "b"}]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "a" in out.stdout and "b" in out.stdout
+
+
+def test_discover_dashboards_default_mode_is_all_viewable(monkeypatch):
+    captured = {}
+
+    def fake_list_dashboards(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    client = make_fake_dashboard_client(list_dashboards=fake_list_dashboards)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert captured["mode"] == "allViewableByUser"
+
+
+def test_discover_dashboards_mode_mine_maps_to_created_by_user(monkeypatch):
+    captured = {}
+
+    def fake_list_dashboards(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    client = make_fake_dashboard_client(list_dashboards=fake_list_dashboards)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards", "--mode", "mine"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert captured["mode"] == "createdByUser"
+
+
+def test_discover_dashboards_invalid_mode_exits_1(monkeypatch):
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: [])
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards", "--mode", "bogus"], env=ENV)
+    assert out.exit_code == 1
+    assert "Invalid --mode" in out.output
+
+
+def test_discover_dashboards_limit_caps_filtered_results(monkeypatch):
+    rows = [{"id": str(i), "title": f"dash-{i}"} for i in range(5)]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(
+        clim.app, ["discover", "dashboards", "--limit", "2", "--format", "json"], env=ENV,
+    )
+    assert out.exit_code == 0, out.output
+    items = jsonlib.loads(out.stdout)
+    assert len(items) == 2
+
+
+def test_discover_dashboards_second_call_uses_cache_not_client(monkeypatch):
+    calls = []
+
+    def fake_list_dashboards(**kwargs):
+        calls.append(kwargs)
+        return [{"id": "1", "title": "a"}]
+
+    client = make_fake_dashboard_client(list_dashboards=fake_list_dashboards)
+    patch_dashboard_client(monkeypatch, client)
+
+    out1 = runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert out1.exit_code == 0, out1.output
+    assert len(calls) == 1
+
+    out2 = runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert out2.exit_code == 0, out2.output
+    assert len(calls) == 1  # cache hit — no second API pull
+    assert "a" in out2.stdout
+    assert "using cached dashboard list" in out2.output
+
+
+def test_discover_dashboards_no_cache_forces_fresh_pull(monkeypatch):
+    calls = []
+
+    def fake_list_dashboards(**kwargs):
+        calls.append(kwargs)
+        return [{"id": "1", "title": "a"}]
+
+    client = make_fake_dashboard_client(list_dashboards=fake_list_dashboards)
+    patch_dashboard_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert len(calls) == 1
+
+    out = runner.invoke(clim.app, ["discover", "dashboards", "--no-cache"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert len(calls) == 2
+
+
+def test_discover_dashboards_mode_all_and_mine_cache_separately(monkeypatch):
+    calls = []
+
+    def fake_list_dashboards(**kwargs):
+        calls.append(kwargs["mode"])
+        return [{"id": "1", "title": kwargs["mode"]}]
+
+    client = make_fake_dashboard_client(list_dashboards=fake_list_dashboards)
+    patch_dashboard_client(monkeypatch, client)
+
+    runner.invoke(clim.app, ["discover", "dashboards", "--mode", "all"], env=ENV)
+    runner.invoke(clim.app, ["discover", "dashboards", "--mode", "mine"], env=ENV)
+    assert calls == ["allViewableByUser", "createdByUser"]
+
+    # both re-invocations hit their own cache, not the client
+    runner.invoke(clim.app, ["discover", "dashboards", "--mode", "all"], env=ENV)
+    runner.invoke(clim.app, ["discover", "dashboards", "--mode", "mine"], env=ENV)
+    assert calls == ["allViewableByUser", "createdByUser"]
+
+
+def test_discover_dashboards_list_error_exits_1(monkeypatch):
+    def raise_error(**k):
+        raise sdc.SumoDashboardError("boom")
+
+    client = make_fake_dashboard_client(list_dashboards=raise_error)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["discover", "dashboards"], env=ENV)
+    assert out.exit_code == 1
+    assert "Failed to list dashboards" in out.output
+
+
+# ---------------------------------------------------------------------------
 # search count / search estimate
 # ---------------------------------------------------------------------------
 

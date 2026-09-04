@@ -158,6 +158,58 @@ def test_get_dashboard_path():
     assert client.session.calls[0]["method"] == "GET"
 
 
+# ---------------------------------------------------------------------------
+# list_dashboards / project_dashboard_summary
+# ---------------------------------------------------------------------------
+
+def _dashboard(id_, **extra):
+    base = {
+        "id": id_, "contentId": f"c-{id_}", "title": f"title-{id_}",
+        "description": "d", "folderId": "f-1", "domain": "Custom",
+        "panels": [{"huge": "x" * 100}], "layout": {"a": 1}, "variables": [{"name": "v"}],
+    }
+    base.update(extra)
+    return base
+
+
+def test_project_dashboard_summary_drops_heavy_fields():
+    summary = sdc.project_dashboard_summary(_dashboard("1"))
+    assert summary == {
+        "id": "1", "contentId": "c-1", "title": "title-1",
+        "description": "d", "folderId": "f-1", "domain": "Custom",
+    }
+
+
+def test_list_dashboards_single_page_defaults_mode_and_limit():
+    page = {"dashboards": [_dashboard("1"), _dashboard("2")], "next": None}
+    client = make_client([make_response(200, json_body=page)])
+    rows = client.list_dashboards()
+    assert [r["id"] for r in rows] == ["1", "2"]
+    assert "panels" not in rows[0]
+    call = client.session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"] == "https://api.example.com/api/v2/dashboards"
+    assert call["params"] == {"limit": sdc.DASHBOARD_PAGE_SIZE, "mode": "allViewableByUser"}
+
+
+def test_list_dashboards_passes_through_mode():
+    page = {"dashboards": [_dashboard("1")], "next": None}
+    client = make_client([make_response(200, json_body=page)])
+    client.list_dashboards(mode="createdByUser")
+    assert client.session.calls[0]["params"]["mode"] == "createdByUser"
+
+
+def test_list_dashboards_paginates_until_next_is_null():
+    page1 = {"dashboards": [_dashboard("1")], "next": "tok-2"}
+    page2 = {"dashboards": [_dashboard("2")], "next": None}
+    client = make_client([make_response(200, json_body=page1), make_response(200, json_body=page2)])
+    rows = client.list_dashboards()
+    assert [r["id"] for r in rows] == ["1", "2"]
+    assert len(client.session.calls) == 2
+    assert "token" not in client.session.calls[0]["params"]
+    assert client.session.calls[1]["params"]["token"] == "tok-2"
+
+
 def test_create_report_job_returns_id():
     client = make_client([make_response(200, json_body={"id": "job-1"})])
     job_id = client.create_report_job({"exportFormat": "Pdf"})
