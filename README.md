@@ -12,15 +12,18 @@ A standalone, customer-distributable reference for building log search and analy
 
 **An agent (or human) driving ad hoc searches from a terminal/bash tool** — the `sumosearch` CLI in `cli/` is a third path, for callers that don't want to embed the Python client in a program and don't have MCP tool access. It's a small `kubectl`-style wrapper over the same endpoints, with token-efficient output shaping (csv/ndjson/json/table, aggregate-friendly defaults, client-side field trimming for raw messages) built in rather than left to the caller. See "Quickstart: the `sumosearch` CLI" below and the full [`cli/README.md`](cli/README.md) reference.
 
+**An agent (or human) investigating a problem, or looking for a good starting query for a log source** — `sumo_dashboard_client.py` exports a Sumo Logic dashboard as a PDF/PNG for visual analysis, or describes its structure, variables, and per-panel query text as query exemplars. Dashboards are built by an org's own users around a specific platform, use case, or business service/user journey, so a relevant one is already a high-fidelity, human-curated starting point. See [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below.
+
 ## Contents
 
 | File | Purpose |
 | --- | --- |
 | `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. See [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for manual job control, configuration, and logging. |
-| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints, with token-efficient output shaping built in. Install via `uv tool install . --with typer --with pyyaml` (see [Quickstart](#quickstart-the-sumosearch-cli) below for why the `--with` flags are required) or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the client — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
-| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. |
-| `tests/` | Unit tests (`test_sumo_search_client.py`, `test_cli.py`, no credentials needed) and a live-credential integration test. |
-| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing this client and the CLI — not needed if you're just copying `sumo_search_client.py` into your own project. |
+| `sumo_dashboard_client.py` | The reference client for the Dashboard Report Job API — export a dashboard as PDF/PNG, or fetch and describe its structure, variables, and panel queries. Sibling to `sumo_search_client.py` (imports its `resolve_time()` helper); copy both files together. See [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below, and [`docs/sumo-dashboard-client-reference.md`](docs/sumo-dashboard-client-reference.md) for manual job control, variable/panel-override handling, configuration, and logging. |
+| `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints (search jobs and dashboard reports), with token-efficient output shaping built in. Install via `uv tool install . --with typer --with pyyaml` (see [Quickstart](#quickstart-the-sumosearch-cli) below for why the `--with` flags are required) or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the clients — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
+| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. No dashboard-specific skills yet — see [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below. |
+| `tests/` | Unit tests (`test_sumo_search_client.py`, `test_sumo_dashboard_client.py`, `test_dashboard_describe.py`, `test_cli.py`, no credentials needed) and live-credential integration tests for both clients. |
+| `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing these clients and the CLI — not needed if you're just copying a client file into your own project. |
 
 ## Skills work with this client, the CLI, or Sumo's `runLogSearch` MCP tool
 
@@ -95,6 +98,33 @@ The skills in this repo are written against that stage, not against any one of t
 | **Work with results** | — |
 | **Investigation workflow discipline** | [`operator-ordering`](skills/operator-ordering/SKILL.md), [`search-job-api-best-practices`](skills/search-job-api-best-practices/SKILL.md) |
 | **Insights, Detection Rules, Alerts, Dashboards** | — out of scope for this repo's skills; native to Sumo's MCP [Investigator skill](https://www.sumologic.com/help/docs/api/mcp-server/#improve-investigations-with-the-sumo-investigator-skill) |
+
+## Dashboard reports: export and discovery
+
+`sumo_dashboard_client.py` is a sibling client for a different API surface: the [Dashboard Report Job API](https://help.sumologic.com/docs/api/dashboards/) (`/api/v2/dashboards/...`), not the Search Job API above. It creates → polls → fetches an async report job that renders a dashboard to PDF or PNG, and it can fetch the dashboard's own JSON object to describe its structure — time range, `{{variables}}` and their saved defaults, panel layout, and each panel's actual query text — without rendering anything.
+
+Dashboards are built by an org's own users around a specific platform, use case, or business service/user journey: each panel already encodes a previously validated search, its title names what it's for, and text panels often add human interpretation alongside the data. That makes a relevant dashboard useful to an agentic caller in two different ways, depending on which side of it you use:
+
+1. **Export for visual analysis.** Render the dashboard as a PDF/PNG — optionally scoped to the current investigation via `--hours`/`--from`/`--to` and `--variable`, or with sections collapsed/expanded via `--panel-override` — then read the image for insight. Because a dashboard runs many panels' worth of searches together, and panel titles/text panels supply interpretation the raw search results don't have, this is a fast way to get broad, human-curated context on a symptom or question without hand-writing each underlying search yourself.
+2. **Discover exemplar queries.** `report describe --queries` (or `describe_dashboard_queries()` in the client) returns every panel's actual query text without executing anything or rendering an image. For a dashboard already known to be relevant to a log source or use case, this is a source of known-good exemplar queries — a starting point when crafting a new search, or raw material for building a skill around a custom or unfamiliar log source.
+
+Both paths need only a dashboard id. `report describe` (no flags) is cheap and synchronous — use it first to confirm what's on a dashboard and what `{{variables}}` it expects before spending a full export job on it.
+
+**Gotcha carried over from the client itself:** the report-job API applies a dashboard's saved default *time range* automatically when no time flag is given, but does **not** apply saved default *variable values* the same way — a `{{var}}` panel with no value supplied renders "Something went wrong" with no error at the job-status level. Both `sumo_dashboard_client.py` (via `default_variable_values()`) and the CLI's `report run` (by default, unless `--no-preflight`) fetch the dashboard first and merge each variable's own `defaultValue` in before submitting.
+
+### Positioning: three paths for dashboard reports
+
+| | `sumo_dashboard_client.py` | `sumosearch` CLI | Sumo MCP |
+| --- | --- | --- | --- |
+| Transport | Python library, embed in your own code | Subprocess, invoked via shell/bash tool | In-chat tool call, no subprocess |
+| Export a PDF/PNG report | `create_report_job()` → `poll_report_job()` → `get_report_result()` | `sumosearch report run <dashboard-id> --format pdf\|png` | **Not available** — no report/export tool |
+| Describe structure, variables, panel queries | `get_dashboard()`, summarized with `cli/dashboard_describe.py`'s pure helpers | `sumosearch report describe <dashboard-id> [--panels] [--queries]` | **Not available** — no describe tool |
+| Best for | Building a service/pipeline (e.g. scheduled export + downstream analysis) on top of the API | An agent driving ad hoc exports/describes from a terminal | Listing/creating dashboards as SIEM content (via the Investigator skill's `listDashboards`/`createDashboard`) — not rendering or describing them |
+| Dependency footprint | `requests` only (same as `sumo_search_client.py`) | none beyond `sumosearch` itself | None (no install) |
+
+Sumo's official MCP tools have no equivalent of `report run`/`report describe` today — a gap this repo's client and CLI fill. If that changes, this table is the place to update.
+
+`skills/` has no dashboard-specific skill yet — teaching an agent when to reach for a dashboard export versus running its own search job, or how to read a rendered dashboard image for insight, is a planned addition for a later iteration. Until then, the query-authoring skills listed [above](#skills-work-with-this-client-the-cli-or-sumos-runlogsearch-mcp-tool) (`common-query-patterns`, `operator-ordering`, etc.) apply equally to query text pulled from a dashboard panel via `report describe --queries`.
 
 ## Why aggregate results are the best choice for token efficiency
 
@@ -187,6 +217,50 @@ us2`) — see [`cli/README.md`](cli/README.md#region-aliases) — and can manage
 multiple named instances/contexts across regions/orgs at once, see
 [`cli/README.md`](cli/README.md#multiple-instances).
 
+## Quickstart: `sumo_dashboard_client.py`
+
+Same dependency (`requests`) and credentials as `sumo_search_client.py` above — copy both files together, since this client imports `resolve_time()` from the search client.
+
+```python
+import os
+from sumo_dashboard_client import (
+    SumoDashboardClient, build_report_body, default_variable_values,
+    poll_report_job, resolve_report_time_range,
+)
+
+client = SumoDashboardClient(
+    access_id=os.environ["SUMO_ACCESS_ID"],
+    access_key=os.environ["SUMO_ACCESS_KEY"],
+    endpoint=os.environ.get("SUMO_ENDPOINT", "https://api.sumologic.com"),
+)
+
+dashboard_id = "000000000ABC123"
+dashboard = client.get_dashboard(dashboard_id)          # needed for variable defaults below
+time_range, _, _ = resolve_report_time_range(hours=24, from_time=None, to_time=None)
+
+body = build_report_body(
+    export_format="pdf", mode="snapshot", theme=None, export_width=None,
+    timezone_name="UTC", dashboard_id=dashboard_id, time_range=time_range,
+    variables=default_variable_values(dashboard), panel_overrides=[],
+)
+job_id = client.create_report_job(body)
+poll_report_job(client, job_id)                          # blocks until Success/Failed
+result = client.get_report_result(job_id)
+
+with open(f"dashboard.{result.ext}", "wb") as f:
+    f.write(result.content)
+```
+
+To describe a dashboard's structure instead of rendering it — no report job, just the fetched object:
+
+```python
+from cli.dashboard_describe import describe_dashboard_queries
+
+print(describe_dashboard_queries(dashboard))   # variables, panels, and every panel's query text
+```
+
+See [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) above for the two agentic use cases this supports, and [`cli/README.md`](cli/README.md#report-run) for the equivalent `sumosearch report run`/`report describe` CLI commands (same underlying gotchas — e.g. default variable values — documented there).
+
 ## Quickstart: the `sumosearch` CLI
 
 The CLI doesn't replace either existing path — it's the missing third leg for the specific case of running a search or answering a discovery question *from a shell*. The query-authoring skills in `skills/` apply unchanged across all three; only the transport/output layer differs. See [`docs/dev/agent-cli-analysis-and-plan.md`](docs/dev/agent-cli-analysis-and-plan.md) for the full design rationale and empirical token-cost measurements behind these choices.
@@ -221,10 +295,14 @@ uv run sumosearch schema '_sourceCategory=prod/app' --from -1h --to now
 # Bulk export straight to disk (time-splits automatically past ~80k rows)
 uv run sumosearch export '_sourceCategory=prod/app error' --from -24h --to now \
     --format csv --out events.csv
+
+# Export a dashboard to PDF, and describe its panel queries — see
+# "Dashboard reports: export and discovery" above
+uv run sumosearch report run <dashboard-id> --hours 24 --format pdf
+uv run sumosearch report describe <dashboard-id> --queries
 ```
 
 Full command list, every flag, output-format defaults, and the token-budget controls (`--max-tokens`, `--drop-null-columns`, the stderr warning): see [`cli/README.md`](cli/README.md).
-
 
 ## Development & Testing
 
@@ -239,7 +317,7 @@ uv run pytest -k retry       # run a subset by keyword
 uv run ruff check .          # lint
 ```
 
-`tests/test_sumo_search_client.py` fakes HTTP via the `session=` parameter `SumoSearchClient.__init__` already accepts, so it exercises the client's real request-building, retry, polling, and pagination logic rather than a re-implementation of it.
+`tests/test_sumo_search_client.py` and `tests/test_sumo_dashboard_client.py` fake HTTP via the `session=` parameter each client's `__init__` already accepts, so they exercise the client's real request-building, retry, polling, and pagination logic rather than a re-implementation of it. `tests/test_dashboard_describe.py` covers `cli/dashboard_describe.py`'s pure summarization functions against hand-built dashboard fixtures.
 
 ```bash
 # Integration tests — exercise the full create -> poll -> fetch -> delete
@@ -247,6 +325,10 @@ uv run ruff check .          # lint
 # Not run in CI. --dry-run skips the live calls.
 uv run python tests/integration_test_sumo_search_client.py
 uv run python tests/integration_test_sumo_search_client.py --dry-run
+
+# Same, for the dashboard report client — needs a real dashboard id too.
+uv run python tests/integration_test_sumo_dashboard_client.py
+uv run python tests/integration_test_sumo_dashboard_client.py --dry-run
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for PR expectations.

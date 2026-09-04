@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Added a "Dashboard reports: export and discovery" section to the
+  top-level README covering `sumo_dashboard_client.py` (added in 0.4.0
+  but not yet documented at the README level): the two agentic use cases
+  (export-for-visual-analysis, query-exemplar discovery), a three-path
+  positioning table (`sumo_dashboard_client.py` / `sumosearch` CLI / Sumo
+  MCP — MCP has no export or describe tool today), and a quickstart
+  example. Added `docs/sumo-dashboard-client-reference.md`, mirroring
+  `docs/sumo-search-client-reference.md`, for manual job control,
+  variable/panel-override handling, configuration, and error types.
+
 ## [0.4.0] - 2026-09-04
 
 ### Added
