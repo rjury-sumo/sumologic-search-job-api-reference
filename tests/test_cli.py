@@ -333,6 +333,71 @@ def test_discover_dashboards_grep_filters_title_description_domain(monkeypatch):
     assert "Unrelated" not in out.stdout
 
 
+def test_discover_dashboards_match_ranks_best_first(monkeypatch):
+    rows = [
+        {"id": "1", "title": "AWS WAF Security Overview", "description": "", "domain": "Custom"},
+        {"id": "2", "title": "WAF Rate Limiting", "description": "", "domain": "Custom"},
+        {"id": "3", "title": "Billing overview", "description": "", "domain": "Custom"},
+    ]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(
+        clim.app,
+        ["discover", "dashboards", "--match", "AWS WAF Security", "--format", "json"],
+        env=ENV,
+    )
+    assert out.exit_code == 0, out.output
+    items = jsonlib.loads(out.stdout)
+    titles = [item["title"] for item in items]
+    assert titles[0] == "AWS WAF Security Overview"
+    assert "Billing overview" not in titles
+
+
+def test_discover_dashboards_match_show_score_adds_column(monkeypatch):
+    rows = [{"id": "1", "title": "AWS WAF Security Overview", "description": "", "domain": "Custom"}]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(
+        clim.app,
+        ["discover", "dashboards", "--match", "AWS WAF", "--show-score", "--format", "json"],
+        env=ENV,
+    )
+    assert out.exit_code == 0, out.output
+    items = jsonlib.loads(out.stdout)
+    assert "score" in items[0]
+    assert items[0]["score"] > 0
+
+
+def test_discover_dashboards_grep_and_match_mutually_exclusive(monkeypatch):
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: [])
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(
+        clim.app,
+        ["discover", "dashboards", "--grep", "x", "--match", "y"],
+        env=ENV,
+    )
+    assert out.exit_code == 1
+    assert "mutually exclusive" in out.output
+
+
+def test_discover_dashboards_match_limit_caps_ranked_results(monkeypatch):
+    rows = [{"id": str(i), "title": f"AWS WAF dash {i}"} for i in range(5)]
+    client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(
+        clim.app,
+        ["discover", "dashboards", "--match", "AWS WAF", "--limit", "2", "--format", "json"],
+        env=ENV,
+    )
+    assert out.exit_code == 0, out.output
+    items = jsonlib.loads(out.stdout)
+    assert len(items) == 2
+
+
 def test_discover_dashboards_no_grep_returns_all(monkeypatch):
     rows = [{"id": "1", "title": "a"}, {"id": "2", "title": "b"}]
     client = make_fake_dashboard_client(list_dashboards=lambda **k: rows)

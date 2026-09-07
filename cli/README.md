@@ -190,6 +190,7 @@ dashboard id.
 
 ```bash
 uv run sumosearch discover dashboards --grep checkout
+uv run sumosearch discover dashboards --match "AWS WAF Security" --limit 10
 ```
 
 `GET /v2/dashboards` has no server-side search parameter, so this pulls the
@@ -198,11 +199,20 @@ client-side:
 
 | Flag | Default | Notes |
 | --- | --- | --- |
-| `--grep` | none | case-insensitive substring filter on `title`/`description`/`domain` |
+| `--grep` | none | case-insensitive substring filter on `title`/`description`/`domain`; mutually exclusive with `--match` |
+| `--match` | none | ranked relevance search on `title`/`description`/`domain` (multi-word ok) — best matches first, capped by `--limit`; for open-ended queries where you don't know the exact wording |
+| `--show-score` | off | with `--match`, add a `score` column to the output |
 | `--mode` | `all` | `all\|mine` — `allViewableByUser` vs. `createdByUser` |
 | `--no-cache` | off | skip the on-disk cache and pull fresh (see below) |
-| `--limit` | `50` | cap on the *filtered* results actually printed |
+| `--limit` | `50` | cap on the *filtered/ranked* results actually printed |
 | `--format` | `csv` | `csv\|ndjson\|json\|table` |
+
+`--grep` is a fast exact substring filter — use it when you know the exact
+word. `--match` instead scores every dashboard by token-overlap and
+fuzzy-similarity against `title`/`description`/`domain` (title weighted
+highest), drops zero-score rows, and returns the top `--limit` by score —
+useful for open-ended queries like `--match "AWS WAF Security"` where the
+exact dashboard title is unknown.
 
 Each dashboard row is projected to `id`, `contentId`, `title`,
 `description`, `folderId`, `domain` — the list endpoint's `panels`/
@@ -216,7 +226,7 @@ often and a caller typically runs several `--grep` searches back to back to
 find what they're after. So the unfiltered list (from `list_dashboards()`)
 is cached to disk at
 `~/sumo-search/output/<instance>/dashboards/list-<mode>.json` and reused
-for 24h before a fresh pull; `--grep`/`--limit` are always applied fresh
+for 24h before a fresh pull; `--grep`/`--match`/`--limit` are always applied fresh
 against whatever list — cached or just-pulled — is in hand. Pass
 `--no-cache` to force a fresh pull (which also refreshes the cache for next
 time). The cache is keyed by instance + `--mode`, so `all` and `mine`

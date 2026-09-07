@@ -25,6 +25,7 @@ import json
 import math
 import os
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import typer
@@ -718,6 +719,45 @@ def _grep_filter(rows: list[dict], keyword: str | None, match_keys: list[str]) -
     return filtered
 
 
+_FUZZY_MIN_RATIO = 0.3
+
+
+def _rank_filter(
+    rows: list[dict], query: str, field_weights: dict[str, float]
+) -> list[tuple[float, dict]]:
+    """Score rows by relevance to `query` across weighted fields, best first.
+
+    Combines cheap token-substring coverage (handles multi-word queries) with
+    a difflib.SequenceMatcher ratio (catches near-misses/typos), thresholded
+    to avoid ranking barely-similar strings above unrelated ones. Rows with
+    zero score are dropped.
+    """
+    query_lower = query.strip().lower()
+    tokens = query_lower.split()
+    if not tokens:
+        return []
+
+    scored = []
+    for row in rows:
+        total = 0.0
+        for field, weight in field_weights.items():
+            value = row.get(field)
+            if not value:
+                continue
+            text = str(value).lower()
+            coverage = sum(1 for t in tokens if t in text) / len(tokens)
+            if query_lower in text:
+                coverage += 1.0
+            fuzzy = SequenceMatcher(None, query_lower, text).ratio()
+            if fuzzy < _FUZZY_MIN_RATIO:
+                fuzzy = 0.0
+            total += weight * (coverage + fuzzy * 0.5)
+        if total > 0:
+            scored.append((total, row))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored
+
+
 def _emit_rows(rows: list[dict], output_format: str) -> None:
     _validate_format(output_format)
     columns = formats.union_columns(rows, None)
@@ -793,6 +833,15 @@ def discover_dashboards(
     grep: str | None = typer.Option(
         None, "--grep", help="Case-insensitive substring filter on title/description/domain.",
     ),
+    match: str | None = typer.Option(
+        None, "--match",
+        help="Ranked relevance search on title/description/domain (multi-word ok, e.g. "
+             "'AWS WAF Security') — best matches first, capped by --limit. "
+             "Mutually exclusive with --grep.",
+    ),
+    show_score: bool = typer.Option(
+        False, "--show-score", help="With --match, add a 'score' column (debugging match quality).",
+    ),
     mode: str = typer.Option(
         "all", "--mode", help="all|mine — all viewable dashboards, or only ones you created.",
     ),
@@ -803,14 +852,20 @@ def discover_dashboards(
              "instance+mode; a fresh pull still refreshes it for next time).",
     ),
     limit: int = typer.Option(
-        50, "--limit", help="Cap on the filtered results actually printed.",
+        50, "--limit", help="Cap on the filtered/ranked results actually printed.",
     ),
     output_format: str = typer.Option("csv", "--format", help="csv|ndjson|json|table."),
 ) -> None:
     """List dashboards (list_dashboards()) — GET /v2/dashboards, no search job created.
     This endpoint has no server-side search param, so the full dashboard list is pulled
-    once (all pages) and cached to disk per instance+--mode; repeated --grep searches
-    within the cache window reuse it. --grep/--limit are always applied fresh."""
+    once (all pages) and cached to disk per instance+--mode; repeated --grep/--match
+    searches within the cache window reuse it. --grep/--match/--limit are always applied
+    fresh. Use --grep for a fast exact substring filter, or --match for an open-ended
+    ranked search (best matches first) when you're not sure of the exact wording."""
+    if grep and match:
+        typer.echo("--grep and --match are mutually exclusive; use one or the other.", err=True)
+        raise typer.Exit(code=1)
+
     key = mode.strip().lower()
     if key not in VALID_LIST_MODES:
         typer.echo(f"Invalid --mode '{mode}': expected 'all' or 'mine'.", err=True)
@@ -834,8 +889,17 @@ def discover_dashboards(
             err=True,
         )
 
-    rows = _grep_filter(rows, grep, ["title", "description", "domain"])
-    _emit_rows(rows[:limit], output_format)
+    if match:
+        scored = _rank_filter(rows, match, {"title": 3.0, "description": 2.0, "domain": 1.0})
+        top = scored[:limit]
+        if show_score:
+            rows = [{**row, "score": round(score, 3)} for score, row in top]
+        else:
+            rows = [row for _, row in top]
+    else:
+        rows = _grep_filter(rows, grep, ["title", "description", "domain"])[:limit]
+
+    _emit_rows(rows, output_format)
 
 
 # ---------------------------------------------------------------------------

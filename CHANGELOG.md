@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-07
+
+### Added
+
+- `sumosearch discover dashboards --match "<query>"` — ranked relevance
+  search across `title`/`description`/`domain` for open-ended queries
+  where the exact title isn't known (e.g. `--match "AWS WAF Security"`).
+  Scores token-overlap plus a `difflib` similarity ratio (title weighted
+  above description above domain), drops zero-score rows, and returns the
+  top `--limit` by score, best first. Mutually exclusive with `--grep`.
+  `--show-score` adds a `score` column to the output for debugging match
+  quality.
+
 ## [0.6.0] - 2026-09-07
 
 ### Changed
