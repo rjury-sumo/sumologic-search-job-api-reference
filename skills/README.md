@@ -8,7 +8,13 @@ MCP tool. Copy this `skills/` directory alongside the client, or use it
 standalone — nothing here depends on the rest of this repo.
 
 Each skill is scoped to one concern; load the one matching the task at
-hand rather than all seven. They split into two groups:
+hand rather than all of them. They split into three groups:
+
+**Start here** — the entry point for a fresh, informally-phrased request:
+
+| Skill | Load when... |
+| --- | --- |
+| [`log-search-journey`](log-search-journey/SKILL.md) | Starting a new log search or investigation and it's not yet clear which skill applies — routes by persona (observability/troubleshooting, security/SIEM, admin) and by journey stage (reuse, scope, sample, map fields, craft, iterate) to the specific skill(s) needed. |
 
 **Calling the API correctly** (client/transport concerns):
 
@@ -32,6 +38,7 @@ hand rather than all seven. They split into two groups:
 
 ## Suggested reading order for a new integration
 
+0. `log-search-journey` (for a fresh, informally-phrased request — routes to the rest of this list by persona and journey stage)
 1. `search-job-api-best-practices` (if you're calling the Search Job API directly, not just through `sumo_search_client.py`)
 2. `discovery-without-metadata` (if scope isn't known yet) → `discovery-profile-scope` (once it is, to sample and confirm schema)
 3. `query-scoping-efficiency`

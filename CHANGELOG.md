@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-08
+
+### Added
+
+- `skills/log-search-journey/SKILL.md` — a new entry-point skill for the
+  `skills/` set. Routes a fresh, informally-phrased log-search or
+  investigation request by persona (observability/troubleshooting,
+  security/SIEM investigation, Sumo Logic admin) and by journey stage
+  (reuse, scope, sample/format, map fields, craft, iterate) to the
+  specific existing skill(s) that cover it. Router only — it doesn't
+  duplicate query syntax, scoping, or discovery content already covered
+  elsewhere in `skills/`.
+
+### Documentation
+
+- `skills/README.md` and the root README's "The log search journey"
+  section now point to `log-search-journey` as the recommended first stop.
+
 ## [0.7.0] - 2026-09-07
 
 ### Added

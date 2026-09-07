@@ -43,6 +43,8 @@ Start with [`skills/README.md`](skills/README.md) for the full skill index, what
 
 Getting from "I have a problem to solve" to "a correctly scoped search — right syntax, right parsing, right field schema — for this specific use case" is rarely one step.
 
+For an agent, [`skills/log-search-journey`](skills/log-search-journey/SKILL.md) is the entry point into the stages and skills below — it routes by persona (observability/troubleshooting, security/SIEM investigation, admin) and by journey stage to the specific skill(s) needed, rather than requiring the whole map below to be read up front.
+
 For Sumo Logic's new Mobot Log Analysis agent the agent interpets user intent, discovers log sources, writes multiple searches, reports back summarized reuslts and can suggest next steps. The flow is more 'ask a question' rather than 'write a log search'.
 
 In the traditional search UI flow this plays out as a series of phases with a UX experience built to enable flexible, fast, open ended log exploration as scale (either raw message or aggegates). Users must frame the problem and write a series of log searches.
