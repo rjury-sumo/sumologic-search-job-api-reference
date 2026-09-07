@@ -204,6 +204,58 @@ def test_describe_dashboard_queries_panel_with_no_queries_gets_empty_list():
 
 
 # ---------------------------------------------------------------------------
+# flatten_panels / flatten_queries — compact row shapes
+# ---------------------------------------------------------------------------
+
+def test_flatten_panels_flat_reading_order_with_parent_key():
+    rows = dd.flatten_panels(make_dashboard())
+    assert [(r["key"], r["parent_key"]) for r in rows] == [
+        ("panelA", None), ("sec1", None), ("child1", "sec1"),
+    ]
+
+
+def test_flatten_panels_row_shape():
+    rows = dd.flatten_panels(make_dashboard())
+    panel_a = next(r for r in rows if r["key"] == "panelA")
+    assert panel_a == {
+        "id": "panel-a-id", "key": "panelA", "parent_key": None,
+        "title": "Errors by region", "panelType": "SumoSearchPanel",
+        "query_count": 1, "variables_referenced": ["region"],
+        "x": 0, "y": 0, "width": 12, "height": 4,
+    }
+
+
+def test_flatten_queries_one_row_per_query_with_panel_context():
+    rows = dd.flatten_queries(make_dashboard())
+    assert rows == [
+        {
+            "panel_id": "panel-a-id", "panel_key": "panelA", "parent_key": None,
+            "panel_title": "Errors by region", "queryKey": "A", "queryType": "Logs",
+            "query": "_sourceCategory={{region}} | count by _sourceHost",
+        },
+        {
+            "panel_id": "child1-id", "panel_key": "child1", "parent_key": "sec1",
+            "panel_title": "Child panel", "queryKey": "A", "queryType": "Logs",
+            "query": "_sourceCategory=*",
+        },
+    ]
+
+
+def test_flatten_queries_panel_with_no_queries_contributes_no_row():
+    rows = dd.flatten_queries(make_dashboard())
+    assert not any(r["panel_key"] == "sec1" for r in rows)
+
+
+def test_flatten_queries_collapses_multiline_query_to_one_line():
+    dashboard = make_dashboard()
+    dashboard["panels"][0]["queries"][0]["queryString"] = (
+        '_sourceCategory=*\n| parse "*" as x\n  | count by x  '
+    )
+    rows = dd.flatten_queries(dashboard)
+    assert rows[0]["query"] == '_sourceCategory=* | parse "*" as x | count by x'
+
+
+# ---------------------------------------------------------------------------
 # _format_time_boundary / _format_time_range
 # ---------------------------------------------------------------------------
 

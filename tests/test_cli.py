@@ -1287,18 +1287,67 @@ def test_report_describe_default_is_summary_level(monkeypatch):
     assert "panels" not in payload  # summary level omits the per-panel list
 
 
-def test_report_describe_panels_flag_includes_panel_list(monkeypatch):
+def test_report_describe_panels_flag_default_is_compact_table(monkeypatch):
     dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
-        {"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []},
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": []},
     ]}
     client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
     patch_dashboard_client(monkeypatch, client)
 
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels"], env=ENV)
     assert out.exit_code == 0, out.output
+    assert "key" in out.output  # table header
+    assert "p1" in out.output
+    assert "{" not in out.output  # not JSON
+
+
+def test_report_describe_panels_flag_json_format_is_compact_rows(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels", "--format", "json"], env=ENV)
+    assert out.exit_code == 0, out.output
+    rows = jsonlib.loads(out.output)
+    assert rows == [{
+        "id": "p1", "key": "p1", "parent_key": None, "title": "Panel One",
+        "panelType": "SumoSearchPanel", "query_count": 0, "variables_referenced": [],
+        "x": None, "y": None, "width": None, "height": None,
+    }]
+
+
+def test_report_describe_panels_flag_full_includes_full_nested_json(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels", "--full"], env=ENV)
+    assert out.exit_code == 0, out.output
     payload = jsonlib.loads(out.output)
     assert [p["key"] for p in payload["panels"]] == ["p1"]
     assert "queries" not in payload["panels"][0]  # panels level, not queries level
+
+
+def test_report_describe_queries_flag_default_is_compact_rows(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": [
+            {"queryKey": "A", "queryType": "Logs", "queryString": "_sourceCategory=* | count"},
+        ]},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--queries", "--format", "csv"], env=ENV)
+    assert out.exit_code == 0, out.output
+    lines = out.output.strip().splitlines()
+    assert lines[0].split(",") == [
+        "panel_id", "panel_key", "parent_key", "panel_title", "queryKey", "queryType", "query",
+    ]
+    assert "p1" in lines[1] and "A" in lines[1] and "_sourceCategory=* | count" in lines[1]
 
 
 def test_report_describe_not_found_exits_1(monkeypatch):

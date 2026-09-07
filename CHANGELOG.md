@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-07
+
+### Changed
+
+- `sumosearch report describe --panels`/`--queries` now default to
+  **compact flat rows** (one row per panel or per query, `--format
+  csv|ndjson|json|table`, `table` default) instead of dumping the full
+  nested JSON — for a dashboard with ~20 panels the old output ran 500+
+  lines, most of it grid-position/`{{var}}`-reference detail nobody asked
+  for. `--full` restores the previous nested-JSON shape. `cli/
+  dashboard_describe.py` gained `flatten_panels()`/`flatten_queries()` for
+  the new shape; `describe_dashboard_panels()`/`describe_dashboard_queries()`
+  are unchanged and now back only `--full`.
+- Compact `--queries` rows collapse each query's internal
+  newlines/whitespace to a single space (real query text is multi-line and
+  broke csv/table row alignment); `--full` still returns the exact
+  original text.
+
+**Breaking**: scripts parsing `report describe --panels`/`--queries`
+JSON output need `--full` to keep the old nested shape.
+
 ## [0.5.0] - 2026-09-04
 
 ### Added

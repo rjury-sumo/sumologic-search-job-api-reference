@@ -318,16 +318,29 @@ explicit path instead.
 ### `report describe`
 
 ```bash
-uv run sumosearch report describe <dashboard-id> [--panels] [--queries]
+uv run sumosearch report describe <dashboard-id>
+uv run sumosearch report describe <dashboard-id> --panels [--format csv|ndjson|json|table]
+uv run sumosearch report describe <dashboard-id> --queries [--format csv|ndjson|json|table]
+uv run sumosearch report describe <dashboard-id> --panels|--queries --full
 ```
 
-Summarizes a dashboard's shape without exporting it: time range, variables
-(with their saved defaults), panel count/types, and layout grid at the
-default "summary" level; add `--panels` for a per-panel list (id, key,
-title, type, `{{var}}` references, grid position — collapsible sections
-nest their member panels under a `children` list); `--queries` implies
-`--panels` and adds each panel's actual query text. Pure JSON output, no
-`--format` flag.
+Summarizes a dashboard's shape without exporting it. With no flags: time
+range, variables (with their saved defaults), panel count/types, and
+layout grid — a single small JSON object (the "summary" level).
+
+`--panels` and `--queries` default to **compact flat rows** — one row per
+panel, or one row per query (`--queries` implies `--panels`) — rendered
+with the same `--format` as `search`/`discover` (`table` by default). A
+collapsible section's member panels are included inline as their own row,
+tagged with `parent_key`, rather than nested. `--queries` rows collapse the
+query text's internal newlines/whitespace to one line so it doesn't break
+row alignment. This is the low-token, agent/terminal-friendly shape and
+should be the default choice.
+
+Add `--full` to get the complete nested JSON instead (grid position per
+panel, `{{var}}` references, collapsible sections nested under a
+`children` list, exact multi-line query text) — much more verbose, use it
+only when you need a field the compact rows omit.
 
 ### `report status` / `report result`
 

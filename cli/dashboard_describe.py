@@ -13,6 +13,24 @@ describe_dashboard_panels()  -> summarize_dashboard() plus a per-panel list (id,
 describe_dashboard_queries() -> describe_dashboard_panels() plus each panel's actual
                                  query text (queryKey, queryType, queryString)
 
+The three functions above are the "--full" shape: a nested dict mirroring
+the dashboard's own panel/section structure, dominated by fields (grid
+position, variable references, panelType counts) that most callers never
+read. flatten_panels() and flatten_queries() are the compact, agent/terminal
+-friendly shape instead: one flat row per panel or per query, collapsible
+section children included inline with a `parent_key` rather than nested,
+ready to hand to a csv/table/json renderer.
+
+flatten_panels()  -> one row per panel: id, key, parent_key, title,
+                      panelType, query_count, variables_referenced, x, y,
+                      width, height
+flatten_queries() -> one row per query: panel_id, panel_key, parent_key,
+                      panel_title, queryKey, queryType, query
+                      ("query" collapses internal whitespace/newlines to a
+                      single space — real query text is multi-line and would
+                      otherwise break csv/table row alignment; --full keeps
+                      the exact original text)
+
 Collapsible sections (panelType 'CollapsiblePanel'): a section's member
 panels are listed by key in its `collapsiblePanelChildKeys`, but each member
 is still a normal top-level entry in `dashboard["panels"]` with its own
@@ -35,6 +53,13 @@ import re
 from datetime import datetime, timezone
 
 _VAR_RE = re.compile(r"\{\{(\w+)\}\}")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _collapse_whitespace(text: str) -> str:
+    """Real query text is multi-line (pipe stages on their own lines); collapse
+    to one line so it doesn't break csv/table row alignment in compact output."""
+    return _WHITESPACE_RE.sub(" ", text).strip()
 
 
 def _format_time_boundary(boundary: dict | None) -> str:
@@ -231,3 +256,49 @@ def describe_dashboard_queries(dashboard: dict) -> dict:
 
     _attach(summary["panels"])
     return summary
+
+
+def flatten_panels(dashboard: dict) -> list[dict]:
+    """Compact 'panels' shape: one flat row per panel, in reading order.
+    A collapsible section's children immediately follow their parent (each
+    with `parent_key` set to the section's key; top-level panels get
+    `parent_key: None`) instead of nesting under a `children` list — a flat
+    row shape is what csv/table/json renderers expect."""
+    layout_map = _panel_layout_map(dashboard)
+    child_keys, children_by_parent = _child_key_map(dashboard)
+    by_key = {p.get("key"): p for p in dashboard.get("panels", []) or []}
+
+    top_level = [p for p in dashboard.get("panels", []) or [] if p.get("key") not in child_keys]
+    top_entries = _sort_reading_order([_panel_entry(p, layout_map) for p in top_level])
+
+    rows: list[dict] = []
+    for entry in top_entries:
+        entry["parent_key"] = None
+        rows.append(entry)
+        if entry["panelType"] == "CollapsiblePanel":
+            child_panels = [by_key[k] for k in children_by_parent.get(entry["key"], []) if k in by_key]
+            child_entries = _sort_reading_order([_panel_entry(c, layout_map) for c in child_panels])
+            for child_entry in child_entries:
+                child_entry["parent_key"] = entry["key"]
+            rows.extend(child_entries)
+    return rows
+
+
+def flatten_queries(dashboard: dict) -> list[dict]:
+    """Compact 'queries' shape: one flat row per query (a panel with no
+    queries contributes no row), in the same panel order as flatten_panels()."""
+    panels_by_key = {p.get("key"): p for p in dashboard.get("panels", []) or []}
+    rows: list[dict] = []
+    for panel_row in flatten_panels(dashboard):
+        panel = panels_by_key.get(panel_row["key"], {})
+        for q in panel.get("queries", []) or []:
+            rows.append({
+                "panel_id": panel_row["id"],
+                "panel_key": panel_row["key"],
+                "parent_key": panel_row["parent_key"],
+                "panel_title": panel_row["title"],
+                "queryKey": q.get("queryKey"),
+                "queryType": q.get("queryType"),
+                "query": _collapse_whitespace(q.get("queryString") or ""),
+            })
+    return rows

@@ -950,8 +950,17 @@ def report_run(
 def report_describe(
     ctx: typer.Context,
     dashboard_id: str = typer.Argument(..., help="Dashboard id to describe."),
-    panels: bool = typer.Option(False, "--panels", help="Include a per-panel list."),
-    queries: bool = typer.Option(False, "--queries", help="Include each panel's query text (implies --panels)."),
+    panels: bool = typer.Option(False, "--panels", help="List panels (compact rows by default)."),
+    queries: bool = typer.Option(
+        False, "--queries", help="List each panel's queries (compact rows by default; implies --panels).",
+    ),
+    output_format: str = typer.Option(
+        "table", "--format", help="csv|ndjson|json|table — compact --panels/--queries rows only.",
+    ),
+    full: bool = typer.Option(
+        False, "--full",
+        help="Emit the full nested JSON (grid position, {{var}} refs, etc.) instead of compact rows.",
+    ),
 ) -> None:
     """Summarize a dashboard's shape (time range, variables, panels, queries) without exporting it."""
     config: Config = ctx.obj
@@ -962,13 +971,23 @@ def report_describe(
         typer.echo(f"Report describe failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    if not (panels or queries):
+        typer.echo(json.dumps(dashboard_describe.summarize_dashboard(dashboard), indent=2))
+        return
+
+    if full:
+        if queries:
+            summary = dashboard_describe.describe_dashboard_queries(dashboard)
+        else:
+            summary = dashboard_describe.describe_dashboard_panels(dashboard)
+        typer.echo(json.dumps(summary, indent=2))
+        return
+
     if queries:
-        summary = dashboard_describe.describe_dashboard_queries(dashboard)
-    elif panels:
-        summary = dashboard_describe.describe_dashboard_panels(dashboard)
+        rows = dashboard_describe.flatten_queries(dashboard)
     else:
-        summary = dashboard_describe.summarize_dashboard(dashboard)
-    typer.echo(json.dumps(summary, indent=2))
+        rows = dashboard_describe.flatten_panels(dashboard)
+    _emit_rows(rows, output_format)
 
 
 @report_app.command("status")
