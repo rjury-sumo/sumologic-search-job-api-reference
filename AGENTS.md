@@ -32,6 +32,13 @@ repo, internal CLI, or specific harness.
   `runSearchJob` MCP tool — never bake this client's specific API surface
   into skill content. Relative links inside `skills/` must resolve within
   this repo only.
+- `.claude/skills` is a symlink to `../skills` (not a copy), so Claude
+  Code auto-discovers every skill here as a project skill. It exists
+  purely for in-repo discoverability — `skills/` stays the single,
+  harness-agnostic source of truth for copy-paste distribution. New
+  skills only need a folder under `skills/<name>/SKILL.md`; the symlink
+  picks them up with no extra wiring. Don't turn `.claude/skills` into a
+  real directory or duplicate content into it.
 
 ## Workflow
 
