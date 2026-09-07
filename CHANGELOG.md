@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-08
+
+### Added
+
+- `skills/discovery-dashboard-reuse/SKILL.md` — a new skill covering the
+  "Reuse" stage of the log search journey: find a dashboard already
+  relevant to a use case via `sumosearch discover dashboards --match/
+  --grep`, then mine its panels for known-good query text via
+  `report describe --queries` (filtered to `queryType=Logs`; Metrics/
+  Tracing panels are out of scope). Documents pulling a diverse sample of
+  query shapes (categorical, time series, transpose, rarer viz types —
+  inferred from query text and panel title, since `report describe` has
+  no panel-visualization-type field) when building reference material for
+  a log source, versus pulling a few example queries to infer metadata
+  and field structure for a specific use case. Also documents the
+  `{{variable}}`-substitution gotcha and the 24h dashboard-list cache.
+
+### Documentation
+
+- `skills/README.md`, root `README.md` (the "Reuse" journey step, its
+  API/CLI/MCP stage-mapping tables, and the dashboard-reports section),
+  `skills/log-search-journey/SKILL.md`, and
+  `docs/workshop-log-search-journey.md` now point to
+  `discovery-dashboard-reuse` for the "Reuse" stage. The
+  `sumologic_search_usage_per_query` mention in each is now framed as an
+  admin/power-user-only option, listed after the dashboard-mining path
+  rather than as the primary suggestion.
+
 ## [0.8.0] - 2026-09-08
 
 ### Added

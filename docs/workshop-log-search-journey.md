@@ -15,7 +15,7 @@ over time, good answers get saved to the Library as a head start next time.
 
 | # | Phase | Output |
 |---|---|---|
-| 1 | **Reuse existing content** — dashboards, saved searches, alerts, or the search-audit index for a prior similar query | A reusable saved asset close to the use case |
+| 1 | **Reuse existing content** — dashboards, saved searches, or alerts; programmatically, mine a relevant dashboard's panel queries (`skills/discovery-dashboard-reuse`), or (admins/power users) the search-audit index for a prior similar query | A reusable saved asset close to the use case |
 | 2 | **Confirm metadata scope** — `_sourceCategory`, `_index`, etc. (UI: autocomplete; API: no discovery endpoint — must be worked around) | Correct metadata scope |
 | 3 | **Sample & discover log format** — JSON, key-value, custom | Format & field schema understood |
 | 4 | **Map fields** — field browser, value distributions, parse/json/regex needed? | Exact fields/values needed |
@@ -33,7 +33,7 @@ over time, good answers get saved to the Library as a head start next time.
 
 | Phase | Challenge | Mitigation |
 |---|---|---|
-| Reuse | Prior art is undiscoverable without knowing it exists | Search `sumologic_search_usage_per_query` for prior queries against the same data; mine dashboards/alerts first |
+| Reuse | Prior art is undiscoverable without knowing it exists | Mine dashboards first (`skills/discovery-dashboard-reuse`: find a relevant dashboard, extract panel query text); admins/power users can additionally search `sumologic_search_usage_per_query` for prior queries against the same data |
 | Confirm scope | **No discovery endpoint in the Search Job API** — UI autocomplete has no API equivalent | `skills/discovery-without-metadata`; `sumologic_volume` index; `list_partitions()`/`list_extraction_rules()` |
 | Sample/discover format | Guessing format wastes scan budget | `skills/discovery-profile-scope` — small-sample queries scoped to the known dimension first |
 | Map fields | LLMs default to `json auto`-style parsing, pulling every field the account has ever defined | Extract fields by name; prefer index-time (FER) fields over search-time parsing |

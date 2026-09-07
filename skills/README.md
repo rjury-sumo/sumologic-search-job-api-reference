@@ -15,6 +15,7 @@ hand rather than all of them. They split into three groups:
 | Skill | Load when... |
 | --- | --- |
 | [`log-search-journey`](log-search-journey/SKILL.md) | Starting a new log search or investigation and it's not yet clear which skill applies — routes by persona (observability/troubleshooting, security/SIEM, admin) and by journey stage (reuse, scope, sample, map fields, craft, iterate) to the specific skill(s) needed. |
+| [`discovery-dashboard-reuse`](discovery-dashboard-reuse/SKILL.md) | Journey stage 1 ("Reuse") — find a dashboard already relevant to the use case and mine its panels for known-good query text, before scoping/crafting a search from scratch. |
 
 **Calling the API correctly** (client/transport concerns):
 
@@ -39,11 +40,12 @@ hand rather than all of them. They split into three groups:
 ## Suggested reading order for a new integration
 
 0. `log-search-journey` (for a fresh, informally-phrased request — routes to the rest of this list by persona and journey stage)
-1. `search-job-api-best-practices` (if you're calling the Search Job API directly, not just through `sumo_search_client.py`)
-2. `discovery-without-metadata` (if scope isn't known yet) → `discovery-profile-scope` (once it is, to sample and confirm schema)
-3. `query-scoping-efficiency`
-4. `search-indexes-partitions` (choosing `_index=`; includes system/audit indexes)
-5. `common-query-patterns` + `operator-ordering`
-6. `ai-agent-result-shaping` (if the caller is an agent/LLM, not a human dashboard)
-7. `scheduled-views-overview` (only if the query will run repeatedly)
-8. `search-siem-investigation` (Cloud SIEM customers only, when the target data is `sec_record_*`/`sec_signal`/insights)
+1. `discovery-dashboard-reuse` (check for a relevant dashboard/known-good query before scoping from scratch)
+2. `search-job-api-best-practices` (if you're calling the Search Job API directly, not just through `sumo_search_client.py`)
+3. `discovery-without-metadata` (if scope isn't known yet) → `discovery-profile-scope` (once it is, to sample and confirm schema)
+4. `query-scoping-efficiency`
+5. `search-indexes-partitions` (choosing `_index=`; includes system/audit indexes)
+6. `common-query-patterns` + `operator-ordering`
+7. `ai-agent-result-shaping` (if the caller is an agent/LLM, not a human dashboard)
+8. `scheduled-views-overview` (only if the query will run repeatedly)
+9. `search-siem-investigation` (Cloud SIEM customers only, when the target data is `sec_record_*`/`sec_signal`/insights)

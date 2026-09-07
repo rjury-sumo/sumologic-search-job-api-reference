@@ -58,9 +58,15 @@ Every request sits somewhere on this six-stage arc, and later stages
 depend on earlier ones being settled correctly:
 
 1. **Reuse** — is there already a saved search, dashboard, or alert close
-   to this? (Library/Apps in the UI; programmatically, mining
-   `sumologic_search_usage_per_query` for a prior query against this data
-   is the closest equivalent — see `search-indexes-partitions`.)
+   to this? (Library/Apps in the UI; programmatically,
+   [`discovery-dashboard-reuse`](../discovery-dashboard-reuse/SKILL.md)
+   covers finding a relevant dashboard and mining its panels for
+   known-good query text — usually the fastest and most reliable
+   equivalent, since most orgs already have Sumo apps or custom
+   dashboards around their key platforms and services. Admins/power
+   users with `sumologic_search_usage_per_query` access have a further
+   option: mining that view for a prior query other users have already
+   run against this data — see `search-indexes-partitions`.)
 2. **Scope** — confirm `_sourceCategory`/`_index`/`_view`. Unknown yet →
    [`discovery-without-metadata`](../discovery-without-metadata/SKILL.md).
    Known already → [`discovery-profile-scope`](../discovery-profile-scope/SKILL.md).
@@ -91,7 +97,9 @@ file isn't there.
 ```
 What's the goal?
 ├─ Reuse a known-good query/dashboard first?
-│    → Check Library/Apps in the UI, or search
+│    → Check Library/Apps in the UI, or programmatically:
+│      discovery-dashboard-reuse (find a relevant dashboard, mine its
+│      panel queries) — admins/power users can additionally search
 │      sumologic_search_usage_per_query for prior queries against this
 │      data (search-indexes-partitions)
 │
