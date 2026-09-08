@@ -49,6 +49,10 @@ repo (these files contain real `_sourceCategory`/`_index` values specific
 to one org, so they can't live in the portable `skills/` directory — see
 `log-domain-skill-authoring` for why). Full format spec and both files'
 exact shape: [`references/log-domain-skill-template.md`](references/log-domain-skill-template.md).
+Want to see the format applied to real query text before generating your
+own? [`skills-log-examples/`](../../skills-log-examples/README.md) at
+the repo root has four worked examples (clearly marked `EXAMPLE ONLY`) —
+not something this skill reads, purely illustration.
 
 ## Workflow
 

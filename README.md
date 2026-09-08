@@ -22,6 +22,7 @@ A standalone, customer-distributable reference for building log search and analy
 | `sumo_dashboard_client.py` | The reference client for the Dashboard Report Job API — export a dashboard as PDF/PNG, or fetch and describe its structure, variables, and panel queries. Sibling to `sumo_search_client.py` (imports its `resolve_time()` helper); copy both files together. See [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below, and [`docs/sumo-dashboard-client-reference.md`](docs/sumo-dashboard-client-reference.md) for manual job control, variable/panel-override handling, configuration, and logging. |
 | `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints (search jobs and dashboard reports), with token-efficient output shaping built in. Install via `uv tool install . --with typer --with pyyaml` (see [Quickstart](#quickstart-the-sumosearch-cli) below for why the `--with` flags are required) or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the clients — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
 | `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. Dashboard-specific skills: [`discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md) mines a relevant dashboard's panels for known-good query text (see [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below); [`discovery-log-domains`](skills/discovery-log-domains/SKILL.md) and [`log-domain-skill-authoring`](skills/log-domain-skill-authoring/SKILL.md) check for, and generate, a persisted per-instance reference bundling scope/format/examples for one technology — see [Log-domain skills](#log-domain-skills-persisting-discovery-for-reuse) below. |
+| `skills-log-examples/` | EXAMPLE ONLY — four real, worked examples of the log-domain-skill format (AWS CloudTrail, Kubernetes API Server, Azure Audit, Nginx Ingress), generated against Sumo Logic's public demo/training org. Not portable content, not auto-loaded — see [`skills-log-examples/README.md`](skills-log-examples/README.md) and [Log-domain skills](#log-domain-skills-persisting-discovery-for-reuse) below. |
 | `tests/` | Unit tests (`test_sumo_search_client.py`, `test_sumo_dashboard_client.py`, `test_dashboard_describe.py`, `test_cli.py`, no credentials needed) and live-credential integration tests for both clients. |
 | `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing these clients and the CLI — not needed if you're just copying a client file into your own project. |
 
@@ -164,6 +165,13 @@ this repo. Full format spec:
 For Claude Code specifically, `.claude/agents/log-domain-discovery.md` is
 a subagent pre-scoped to the authoring workflow — a good fit for
 launching as a background research task per technology.
+
+**Want to see what the output actually looks like first?**
+[`skills-log-examples/`](skills-log-examples/README.md) has four real,
+worked examples (AWS CloudTrail, Kubernetes API Server, Azure Audit,
+Nginx Ingress) generated against Sumo Logic's public demo/training org —
+illustration only, clearly marked `EXAMPLE ONLY`, not something
+`discovery-log-domains` will ever read.
 
 ## Why aggregate results are the best choice for token efficiency
 

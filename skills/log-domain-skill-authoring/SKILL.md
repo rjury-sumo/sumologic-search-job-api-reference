@@ -41,6 +41,13 @@ who have access to the same instance (Slack it, drop it in a shared
 drive, etc.) even though it never enters this repo — that's the "share
 with others in their org" use case this format is built for.
 
+Four worked examples of the finished output — real query text, real
+gotchas found along the way — live at
+[`skills-log-examples/`](../../skills-log-examples/README.md) at the
+repo root, generated against Sumo Logic's public demo/training org and
+explicitly marked `EXAMPLE ONLY`. Worth reading before running this
+workflow for the first time to see the target shape.
+
 ## When to run this
 
 - A request names a specific technology with no existing log-domain

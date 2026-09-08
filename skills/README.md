@@ -49,7 +49,10 @@ hand rather than all of them. They split into three groups:
 directory — it deliberately writes to `~/sumo-search/output/<instance>/
 skills/`, not into this repo. This directory stays 100% portable and
 org-agnostic; only the two skills above (which teach the *method*) live
-here.
+here. `../skills-log-examples/` at the repo root has four worked
+examples of that output, generated against Sumo Logic's public
+demo/training org and marked `EXAMPLE ONLY` — read for the shape, not as
+a live reference.
 
 ## Suggested reading order for a new integration
 

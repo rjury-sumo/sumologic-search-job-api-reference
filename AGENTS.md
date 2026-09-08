@@ -89,11 +89,18 @@ These are different invocations — don't conflate them:
   `_sourceCategory`/`_index` values to
   `~/sumo-search/output/<instance>/skills/<domain-slug>/SKILL.md` (read
   back by `skills/discovery-log-domains`) — outside this repo entirely,
-  same directory the CLI already uses for its dashboard-list cache. If a
-  future change is tempted to commit an example of that output into
-  `skills/` for documentation purposes, sanitize it first (placeholder
-  metadata, not a real org's values) or keep it out — real per-instance
-  output must never land in a commit.
+  same directory the CLI already uses for its dashboard-list cache.
+- `skills-log-examples/` (repo root, sibling to `skills/`) holds four
+  illustrative examples of that output format, generated against Sumo
+  Logic's own public demo/training org — safe to commit because that org
+  has no real customer data. Every file there is explicitly marked
+  `EXAMPLE ONLY` in its frontmatter and body, and the folder is never
+  read by `discovery-log-domains` (which only looks under
+  `~/sumo-search/output/`). If this set is ever regenerated: re-check for
+  anything worth redacting before committing (raw-log excerpts
+  especially — see `skills-log-examples/README.md` for what was already
+  redacted) even though the source org is a training sandbox, not a real
+  customer.
 - `.claude/agents/log-domain-discovery.md` is a Claude-Code-specific
   subagent (like `.claude/skills`, not part of the portable `skills/`
   set) pre-scoped to the `log-domain-skill-authoring` workflow above —

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-08
+
+### Added
+
+- `skills-log-examples/` — four real, worked examples of the
+  log-domain-skill format (AWS CloudTrail, Kubernetes API Server, Azure
+  Audit, Nginx Ingress), generated against Sumo Logic's public
+  demo/training org. Deliberately separate from `skills/` — every file
+  is marked `EXAMPLE ONLY` in frontmatter and body, and none of it is
+  read by `discovery-log-domains` (which only looks under
+  `~/sumo-search/output/`). One client IP in the Nginx raw-log excerpt
+  was replaced with an RFC 3849 documentation-range address; no other
+  redaction was needed (the source org has no real customer data).
+
+### Documentation
+
+- Root `README.md` (Contents table, "Log-domain skills" section),
+  `AGENTS.md`, `skills/README.md`, `skills/discovery-log-domains/SKILL.md`,
+  and `skills/log-domain-skill-authoring/SKILL.md` now point to
+  `skills-log-examples/` for anyone who wants to see the target output
+  shape before running the authoring workflow themselves.
+
 ## [0.10.0] - 2026-09-08
 
 ### Added
