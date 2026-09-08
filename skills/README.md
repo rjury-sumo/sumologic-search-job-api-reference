@@ -15,6 +15,7 @@ hand rather than all of them. They split into three groups:
 | Skill | Load when... |
 | --- | --- |
 | [`log-search-journey`](log-search-journey/SKILL.md) | Starting a new log search or investigation and it's not yet clear which skill applies — routes by persona (observability/troubleshooting, security/SIEM, admin) and by journey stage (reuse, scope, sample, map fields, craft, iterate) to the specific skill(s) needed. |
+| [`discovery-log-domains`](discovery-log-domains/SKILL.md) | The request names a specific technology (AWS CloudTrail, Kubernetes, Nginx, ...) — check for an already-generated, org-specific log-domain skill for it *before* running scope/format/query discovery from scratch. Load before `discovery-without-metadata`/`discovery-profile-scope`/`discovery-dashboard-reuse` whenever the technology is nameable. |
 | [`discovery-dashboard-reuse`](discovery-dashboard-reuse/SKILL.md) | Journey stage 1 ("Reuse") — find a dashboard already relevant to the use case and mine its panels for known-good query text, before scoping/crafting a search from scratch. |
 
 **Calling the API correctly** (client/transport concerns):
@@ -37,15 +38,29 @@ hand rather than all of them. They split into three groups:
 | [`scheduled-views-overview`](scheduled-views-overview/SKILL.md) | A recurring query might benefit from (or already targets) a scheduled view (`_view=`). |
 | [`search-siem-investigation`](search-siem-investigation/SKILL.md) | Querying Cloud SIEM data — normalized records (`sec_record_*`), signals (`sec_signal`), or insight audit events. Cloud SIEM customers only. |
 
+**Persisting discovery for reuse** (writes an org-specific file *outside* this repo — see below):
+
+| Skill | Load when... |
+| --- | --- |
+| [`log-domain-skill-authoring`](log-domain-skill-authoring/SKILL.md) | A technology was just discovered from scratch (scope + format + example queries) and is likely to come up again — research it once and write a per-instance log-domain skill file so `discovery-log-domains` can serve it instantly next time. Chains `discovery-without-metadata` → `discovery-profile-scope` → `discovery-dashboard-reuse` into one assembled output; a good fit for a scoped background agent (see `.claude/agents/log-domain-discovery.md`). |
+
+`log-domain-skill-authoring`'s output contains real, org-specific
+`_sourceCategory`/`_index` values, so — unlike every other skill in this
+directory — it deliberately writes to `~/sumo-search/output/<instance>/
+skills/`, not into this repo. This directory stays 100% portable and
+org-agnostic; only the two skills above (which teach the *method*) live
+here.
+
 ## Suggested reading order for a new integration
 
 0. `log-search-journey` (for a fresh, informally-phrased request — routes to the rest of this list by persona and journey stage)
-1. `discovery-dashboard-reuse` (check for a relevant dashboard/known-good query before scoping from scratch)
-2. `search-job-api-best-practices` (if you're calling the Search Job API directly, not just through `sumo_search_client.py`)
-3. `discovery-without-metadata` (if scope isn't known yet) → `discovery-profile-scope` (once it is, to sample and confirm schema)
-4. `query-scoping-efficiency`
-5. `search-indexes-partitions` (choosing `_index=`; includes system/audit indexes)
-6. `common-query-patterns` + `operator-ordering`
-7. `ai-agent-result-shaping` (if the caller is an agent/LLM, not a human dashboard)
-8. `scheduled-views-overview` (only if the query will run repeatedly)
-9. `search-siem-investigation` (Cloud SIEM customers only, when the target data is `sec_record_*`/`sec_signal`/insights)
+1. `discovery-log-domains` (a named technology may already have a saved scope+format+examples bundle for this instance — check before anything below) → `log-domain-skill-authoring` (persist a fresh discovery for next time)
+2. `discovery-dashboard-reuse` (check for a relevant dashboard/known-good query before scoping from scratch)
+3. `search-job-api-best-practices` (if you're calling the Search Job API directly, not just through `sumo_search_client.py`)
+4. `discovery-without-metadata` (if scope isn't known yet) → `discovery-profile-scope` (once it is, to sample and confirm schema)
+5. `query-scoping-efficiency`
+6. `search-indexes-partitions` (choosing `_index=`; includes system/audit indexes)
+7. `common-query-patterns` + `operator-ordering`
+8. `ai-agent-result-shaping` (if the caller is an agent/LLM, not a human dashboard)
+9. `scheduled-views-overview` (only if the query will run repeatedly)
+10. `search-siem-investigation` (Cloud SIEM customers only, when the target data is `sec_record_*`/`sec_signal`/insights)

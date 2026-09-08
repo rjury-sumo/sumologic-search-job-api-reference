@@ -58,7 +58,12 @@ Every request sits somewhere on this six-stage arc, and later stages
 depend on earlier ones being settled correctly:
 
 1. **Reuse** — is there already a saved search, dashboard, or alert close
-   to this? (Library/Apps in the UI; programmatically,
+   to this? If the request names a specific technology, check
+   [`discovery-log-domains`](../discovery-log-domains/SKILL.md) **first**
+   — a prior discovery run may already have bundled confirmed scope,
+   format, and example queries for it in this instance, short-circuiting
+   stages 1-4 below entirely. Otherwise: Library/Apps in the UI, or
+   programmatically,
    [`discovery-dashboard-reuse`](../discovery-dashboard-reuse/SKILL.md)
    covers finding a relevant dashboard and mining its panels for
    known-good query text — usually the fastest and most reliable
@@ -66,7 +71,11 @@ depend on earlier ones being settled correctly:
    dashboards around their key platforms and services. Admins/power
    users with `sumologic_search_usage_per_query` access have a further
    option: mining that view for a prior query other users have already
-   run against this data — see `search-indexes-partitions`.)
+   run against this data — see `search-indexes-partitions`. Worth
+   discovering from scratch once, either way: if this technology is
+   likely to come up again, [`log-domain-skill-authoring`](../log-domain-skill-authoring/SKILL.md)
+   persists the result so the next request hits `discovery-log-domains`
+   instead of repeating this stage.
 2. **Scope** — confirm `_sourceCategory`/`_index`/`_view`. Unknown yet →
    [`discovery-without-metadata`](../discovery-without-metadata/SKILL.md).
    Known already → [`discovery-profile-scope`](../discovery-profile-scope/SKILL.md).
@@ -97,11 +106,14 @@ file isn't there.
 ```
 What's the goal?
 ├─ Reuse a known-good query/dashboard first?
-│    → Check Library/Apps in the UI, or programmatically:
+│    → Named technology? Check discovery-log-domains first — may already
+│      be fully bundled for this instance.
+│      Otherwise: Library/Apps in the UI, or programmatically:
 │      discovery-dashboard-reuse (find a relevant dashboard, mine its
 │      panel queries) — admins/power users can additionally search
 │      sumologic_search_usage_per_query for prior queries against this
-│      data (search-indexes-partitions)
+│      data (search-indexes-partitions). Worth persisting via
+│      log-domain-skill-authoring if this technology will recur.
 │
 ├─ Investigating a security event / SIEM entity (user, host, IP, insight)?
 │    → search-siem-investigation

@@ -28,6 +28,14 @@ from there to sample raw logs and confirm schema.
 
 ## Fast paths — try these before scanning raw logs
 
+### 0. Check for an already-discovered log-domain skill first
+
+If the target is a nameable technology (not just "some logs somewhere"),
+check `discovery-log-domains` **before** any of the fast paths below —
+if this instance already has a confirmed log-domain skill for it, scope
+is already known and the rest of this skill doesn't need to run at all.
+Only fall through to Fast paths A-C if no matching entry exists yet.
+
 ### A. Data volume index (fast, cheap, needs `sumologic_volume` read access)
 
 If the `sumologic_volume` index is enabled and readable, it's the
@@ -97,6 +105,17 @@ and fall back to the raw-log sequence below. Because this varies per
 tenant rather than per session, it's worth a short note in your own
 integration ("this credential can list partitions but not
 sumologic_volume") so you don't re-probe it every run.
+
+### C. Dashboard reuse (when the technology likely has app/dashboard content)
+
+For any reasonably common or well-known technology, a relevant Sumo Logic
+dashboard often states `_sourceCategory=`/`_index=` directly on a panel's
+scope line — `discovery-dashboard-reuse` (`sumosearch discover
+dashboards --match "<technology>"` → `report describe --queries`)
+resolves scope and pulls example queries in the same pass, often cheaper
+than Fast path A/B or the raw-log sequence below. Best tried early for
+any named platform/service; less useful for a fully custom or homegrown
+log source with no dashboard content anywhere.
 
 ## Raw-log discovery sequence (fallback — always available)
 
@@ -200,6 +219,9 @@ events) have their own dedicated skills rather than being covered here:
 
 ## Key Rules
 
+- **Check `discovery-log-domains` before starting** if the technology is
+  nameable — a prior discovery run may already be saved for this
+  instance, making the rest of this skill unnecessary.
 - **Try the data-volume index or partition/FER admin endpoints first**
   when RBAC allows — both resolve source category/view names without
   scanning a single raw log, and are far cheaper than the raw-log
@@ -253,6 +275,11 @@ _sourceCategory=prod/checkout | count by _view | sort _count desc | limit 5
 
 ## Related Skills (this folder)
 
+- `discovery-log-domains` — check this first (Fast path 0) — a saved,
+  richer bundle of scope + format + examples may already exist for this
+  technology in this instance.
+- `discovery-dashboard-reuse` — Fast path C above; also the source of
+  known-good example queries once scope is resolved by any path.
 - `discovery-profile-scope` — next step once `_sourceCategory`/`_index` is
   locked in: sample raw logs, confirm schema/index-time fields, and
   enumerate other metadata dimensions within this scope.
@@ -271,3 +298,7 @@ _sourceCategory=prod/checkout | count by _view | sort _count desc | limit 5
 - `search-siem-investigation` — if discovery turns up `sec_record_*` /
   `sec_signal` scope, its query rules and cost-aware time scoping differ
   from standard log partitions.
+- `log-domain-skill-authoring` — worth running once scope/format/examples
+  are all resolved here, so the next request for this technology in this
+  instance can skip straight to `discovery-log-domains` instead of
+  repeating this whole sequence.

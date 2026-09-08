@@ -83,6 +83,22 @@ These are different invocations — don't conflate them:
   skills only need a folder under `skills/<name>/SKILL.md`; the symlink
   picks them up with no extra wiring. Don't turn `.claude/skills` into a
   real directory or duplicate content into it.
+- **Org-specific generated content never goes in `skills/`.**
+  `skills/log-domain-skill-authoring/SKILL.md` researches one log
+  technology in one Sumo Logic instance and writes real
+  `_sourceCategory`/`_index` values to
+  `~/sumo-search/output/<instance>/skills/<domain-slug>/SKILL.md` (read
+  back by `skills/discovery-log-domains`) — outside this repo entirely,
+  same directory the CLI already uses for its dashboard-list cache. If a
+  future change is tempted to commit an example of that output into
+  `skills/` for documentation purposes, sanitize it first (placeholder
+  metadata, not a real org's values) or keep it out — real per-instance
+  output must never land in a commit.
+- `.claude/agents/log-domain-discovery.md` is a Claude-Code-specific
+  subagent (like `.claude/skills`, not part of the portable `skills/`
+  set) pre-scoped to the `log-domain-skill-authoring` workflow above —
+  bounded to one technology/instance per run, output confined to the
+  per-instance directory.
 
 ## Workflow
 

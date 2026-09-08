@@ -207,3 +207,9 @@ None — this is a single-concern skill.
   complementary, admin/power-user-only source of "known good" prior
   queries (mining the search-audit log itself rather than dashboard
   content) — see its `references/sumologic-search-usage.md`.
+- `discovery-log-domains` / `log-domain-skill-authoring` — if this
+  technology is likely to come up repeatedly, the query sample this
+  skill produces is exactly what `log-domain-skill-authoring` persists
+  into a reusable per-instance file, so the next request skips this step
+  entirely. Check `discovery-log-domains` first — a prior run may have
+  already done this.

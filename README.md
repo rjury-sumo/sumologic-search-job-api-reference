@@ -21,7 +21,7 @@ A standalone, customer-distributable reference for building log search and analy
 | `sumo_search_client.py` | The reference client — search job lifecycle plus read-only discovery endpoints (partitions, field extraction rules, scheduled views). Copy this into your project. See [`docs/sumo-search-client-reference.md`](docs/sumo-search-client-reference.md) for manual job control, configuration, and logging. |
 | `sumo_dashboard_client.py` | The reference client for the Dashboard Report Job API — export a dashboard as PDF/PNG, or fetch and describe its structure, variables, and panel queries. Sibling to `sumo_search_client.py` (imports its `resolve_time()` helper); copy both files together. See [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below, and [`docs/sumo-dashboard-client-reference.md`](docs/sumo-dashboard-client-reference.md) for manual job control, variable/panel-override handling, configuration, and logging. |
 | `cli/` | `sumosearch` — a shell/agent-oriented CLI wrapping the same endpoints (search jobs and dashboard reports), with token-efficient output shaping built in. Install via `uv tool install . --with typer --with pyyaml` (see [Quickstart](#quickstart-the-sumosearch-cli) below for why the `--with` flags are required) or `uv sync --group cli`, invoke as `sumosearch ...`. Not a copy-paste artifact like the clients — it's an installable console-script entry point. See [`cli/README.md`](cli/README.md) for the full command reference. |
-| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. One dashboard-specific skill so far — [`discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md), for mining a relevant dashboard's panels for known-good query text; see [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below for the broader picture. |
+| `skills/` | Portable, harness-agnostic Agent Skills: the API-calling best practices the client implements, plus query-authoring skills (scoping, discovery, operator ordering, common patterns, agent-friendly result shaping, scheduled views, indexes/partitions, Cloud SIEM). See [`skills/README.md`](skills/README.md) for the full index and suggested reading order. Dashboard-specific skills: [`discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md) mines a relevant dashboard's panels for known-good query text (see [Dashboard reports: export and discovery](#dashboard-reports-export-and-discovery) below); [`discovery-log-domains`](skills/discovery-log-domains/SKILL.md) and [`log-domain-skill-authoring`](skills/log-domain-skill-authoring/SKILL.md) check for, and generate, a persisted per-instance reference bundling scope/format/examples for one technology — see [Log-domain skills](#log-domain-skills-persisting-discovery-for-reuse) below. |
 | `tests/` | Unit tests (`test_sumo_search_client.py`, `test_sumo_dashboard_client.py`, `test_dashboard_describe.py`, `test_cli.py`, no credentials needed) and live-credential integration tests for both clients. |
 | `pyproject.toml` | A self-contained [uv](https://docs.astral.sh/uv/) project for developing and testing these clients and the CLI — not needed if you're just copying a client file into your own project. |
 
@@ -51,7 +51,7 @@ In the traditional search UI flow this plays out as a series of phases with a UX
 
 We can think of this log analysis journey for the user as a series of steps to go from question/prolem to log search(es). A user who already knows part of the problem domain for their Sumo Logic instance can skip ahead to a later one, and over time saves content in the Library as a known-good starting point for next time:
 
-1. **Reuse existing content.** Check Sumo Logic apps, dashboards, saved searches, and alerts for a solved (or close-relative) use case — this can fast-forward straight to field mapping or query crafting below. Programmatically, [`skills/discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md) covers finding a relevant dashboard via `sumosearch discover dashboards --match/--grep` and mining its panels for known-good query text via `report describe --queries` — most orgs already have Sumo apps or custom dashboards around their key platforms and services, so this is usually the fastest path to a real, human-validated starting query. Admins/power users have a further option: pivoting off data-volume/ingestion audit data to find matching metadata, or searching `sumologic_search_usage_per_query` for similar searches other users have already run (RBAC-gated — not available to every credential).
+1. **Reuse existing content.** Check Sumo Logic apps, dashboards, saved searches, and alerts for a solved (or close-relative) use case — this can fast-forward straight to field mapping or query crafting below. If the request names a specific technology, [`skills/discovery-log-domains`](skills/discovery-log-domains/SKILL.md) checks first for an already-generated, org-specific reference bundling confirmed scope + format + example queries for it — see [Log-domain skills](#log-domain-skills-persisting-discovery-for-reuse) below. Otherwise, programmatically, [`skills/discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md) covers finding a relevant dashboard via `sumosearch discover dashboards --match/--grep` and mining its panels for known-good query text via `report describe --queries` — most orgs already have Sumo apps or custom dashboards around their key platforms and services, so this is usually the fastest path to a real, human-validated starting query. Admins/power users have a further option: pivoting off data-volume/ingestion audit data to find matching metadata, or searching `sumologic_search_usage_per_query` for similar searches other users have already run (RBAC-gated — not available to every credential).
    > **Output:** a reusable saved asset close to the current use case.
 2. **Confirm metadata scope** (`_sourceCategory`, `_index`, etc.) with exploratory searches — scope drives both search speed and success rate. In the UI, query-assist autocomplete surfaces metadata fields and values as you type, IDE-style; the Search Job API has no discovery endpoint of its own, which is what [`skills/discovery-without-metadata`](skills/discovery-without-metadata/SKILL.md) exists to work around programmatically.
    > **Output:** correct metadata scope, e.g. `_sourceCategory=foo _index=bar`.
@@ -129,6 +129,41 @@ Both paths need only a dashboard id. `report describe` (no flags) is cheap and s
 Sumo's official MCP tools have no equivalent of `report run`/`report describe` today — a gap this repo's client and CLI fill. If that changes, this table is the place to update.
 
 [`skills/discovery-dashboard-reuse`](skills/discovery-dashboard-reuse/SKILL.md) covers finding a relevant dashboard and mining its panels for known-good query text via `report describe --queries` — the second use case above. Teaching an agent when to reach for a dashboard *export* versus running its own search job, or how to read a rendered dashboard image for insight (the first use case above), remains a planned addition for a later iteration. The query-authoring skills listed [above](#skills-work-with-this-client-the-cli-or-sumos-runlogsearch-mcp-tool) (`common-query-patterns`, `operator-ordering`, etc.) apply equally to query text pulled from a dashboard panel via `report describe --queries`.
+
+## Log-domain skills: persisting discovery for reuse
+
+Running `discovery-without-metadata` → `discovery-profile-scope` →
+`discovery-dashboard-reuse` for the same technology (AWS CloudTrail,
+Kubernetes, Nginx, a proprietary internal service, ...) every time it
+comes up wastes work the first successful discovery already did. Two
+skills turn that one-off research into a persisted, reusable asset:
+
+- [`skills/log-domain-skill-authoring`](skills/log-domain-skill-authoring/SKILL.md)
+  — chains the three discovery skills above into one workflow and writes
+  the result (confirmed metadata scope, log format/field-extraction
+  approach, and a shape-diverse sample of known-good queries) to a single
+  file for one technology in one Sumo Logic instance.
+- [`skills/discovery-log-domains`](skills/discovery-log-domains/SKILL.md)
+  — the read side: checks for that file *before* running fresh
+  discovery, so a second request for the same technology in the same
+  instance skips straight to a saved answer.
+
+**These generated files are deliberately not part of `skills/`.** They
+contain real `_sourceCategory`/`_index` values specific to one org's
+instance — committing them here would break the "works when copied out
+with zero other context, not tied to any specific org" guarantee the
+rest of this repo's skills hold to. Output instead goes to
+`~/sumo-search/output/<instance>/skills/<domain-slug>/SKILL.md` (plus a
+per-instance `INDEX.md`), the same per-instance cache directory the CLI
+already uses for the dashboard-list cache — local, never git-committed.
+An admin or power user can still hand a generated file directly to a
+teammate with access to the same instance; it just doesn't travel with
+this repo. Full format spec:
+[`skills/discovery-log-domains/references/log-domain-skill-template.md`](skills/discovery-log-domains/references/log-domain-skill-template.md).
+
+For Claude Code specifically, `.claude/agents/log-domain-discovery.md` is
+a subagent pre-scoped to the authoring workflow — a good fit for
+launching as a background research task per technology.
 
 ## Why aggregate results are the best choice for token efficiency
 

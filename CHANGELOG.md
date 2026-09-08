@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-08
+
+### Added
+
+- `skills/discovery-log-domains/SKILL.md` — checks for an
+  already-discovered, org-specific log-domain skill (confirmed metadata
+  scope, log format/fields, and a shape-diverse sample of known-good
+  queries for one technology in one Sumo Logic instance) before running
+  fresh scope/format/query discovery. Load first, ahead of
+  `discovery-without-metadata`/`discovery-profile-scope`/
+  `discovery-dashboard-reuse`, whenever the target technology is
+  nameable. Includes the format spec and templates at
+  `references/log-domain-skill-template.md`.
+- `skills/log-domain-skill-authoring/SKILL.md` — the write side: chains
+  `discovery-without-metadata` → `discovery-profile-scope` →
+  `discovery-dashboard-reuse` (or the search-usage audit index, for
+  admins) into one workflow that researches a technology and writes/
+  refreshes its log-domain skill file. Output is deliberately **not**
+  committed to this repo — it contains real, org-specific
+  `_sourceCategory`/`_index` values, so it's written to
+  `~/sumo-search/output/<instance>/skills/<domain-slug>/SKILL.md` (plus
+  a per-instance `INDEX.md`), mirroring the existing dashboard-list
+  cache convention.
+- `.claude/agents/log-domain-discovery.md` — a Claude Code subagent
+  pre-scoped to the `log-domain-skill-authoring` workflow, for launching
+  as a background research task per technology.
+
+### Documentation
+
+- `skills/discovery-without-metadata/SKILL.md` now cross-links
+  `discovery-dashboard-reuse` as a fast path (previously not referenced
+  at all) and `discovery-log-domains` as a "Fast path 0" check before
+  any discovery runs.
+- `skills/discovery-dashboard-reuse/SKILL.md`, `skills/log-search-journey/
+  SKILL.md`, `skills/README.md`, root `README.md`, and `AGENTS.md` now
+  reference the two new skills and the per-instance output convention.
+- Validated the log-domain-skill format against four real discoveries on
+  the `demo` Sumo Logic instance (AWS CloudTrail, Kubernetes API Server,
+  Azure Audit, Nginx Ingress) — output written locally to
+  `~/sumo-search/output/demo/skills/` (not part of this commit).
+
 ## [0.9.0] - 2026-09-08
 
 ### Added
