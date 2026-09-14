@@ -165,6 +165,16 @@ uv run sumosearch search count '_sourceCategory=prod/app error' --from -1h --to 
 Prints a single row-count scalar (`estimate_count()`) and nothing else — no
 `--format`, since there's only one number to render.
 
+This does **not** run your query as a raw-message search and count the
+results client-side, and it does not call a separate usage/estimate
+endpoint. It appends `| count` to the scope you pass in (here:
+`_sourceCategory=prod/app error | count`) and submits that as a real
+records-type Search Job API job (`requiresRawMessages=False`). Sumo
+aggregates server-side and never retains individual messages in the query
+scope, so it's cheaper and faster than `search run`/`search estimate` on
+the same scope — pass a bare scope/filter expression, not a query that
+already ends in `| count` yourself.
+
 ### `discover partitions` / `discover fers` / `discover views`
 
 Three synchronous, no-job-created discovery commands, useful before a
