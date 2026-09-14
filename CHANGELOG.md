@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-15
+
+### Changed
+
+- `sumosearch` CLI: `--from`/`--to` are now optional on `search run`,
+  `search estimate`, `search count`, `schema`, `sample`, and `export`.
+  When omitted, they default to `-15m`/`now` instead of raising a
+  "missing option" error.
+
 ## [0.11.0] - 2026-09-08
 
 ### Added

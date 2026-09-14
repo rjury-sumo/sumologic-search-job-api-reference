@@ -77,6 +77,14 @@ app.add_typer(report_app, name="report")
 
 _AUTO_PARSING_MODES = {"manual": "Manual", "autoparse": "AutoParse"}
 
+# Default time window applied when --from/--to are omitted on search-style commands.
+DEFAULT_FROM_TIME = "-15m"
+DEFAULT_TO_TIME = "now"
+
+
+def _apply_time_defaults(from_time: str | None, to_time: str | None) -> tuple[str, str]:
+    return (from_time or DEFAULT_FROM_TIME, to_time or DEFAULT_TO_TIME)
+
 # Safety margin below MAX_RAW_MESSAGES (100k) — matches time_split_search()'s
 # own docstring guidance ("size interval_hours so no window exceeds ~80,000
 # rows"). Above this estimated row count, `export` time-splits instead of
@@ -254,13 +262,13 @@ def _warn_if_over_budget(output: str, no_warn: bool) -> None:
 def search_run(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query."),
-    from_time: str = typer.Option(
-        ..., "--from", help='Start time: epoch ms, "now", a relative expression '
-             '("-1h"), or ISO 8601.',
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time: epoch ms, "now", a relative expression '
+             '("-1h"), or ISO 8601. Default: "-15m".',
     ),
-    to_time: str = typer.Option(
-        ..., "--to", help='End time: epoch ms, "now", a relative expression '
-             '("-1h"), or ISO 8601.',
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time: epoch ms, "now", a relative expression '
+             '("-1h"), or ISO 8601. Default: "now".',
     ),
     output_format: str | None = typer.Option(
         None, "--format",
@@ -294,6 +302,8 @@ def search_run(
     ),
 ) -> None:
     """Run a search job (create -> poll -> fetch -> delete) and print the result."""
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
+
     if aggregate and raw:
         typer.echo("Cannot pass both --aggregate and --raw.", err=True)
         raise typer.Exit(code=1)
@@ -366,11 +376,16 @@ def search_run(
 def search_estimate(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query."),
-    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
-    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time (same forms as `search run`). Default: "-15m".',
+    ),
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time (same forms as `search run`). Default: "now".',
+    ),
     output_format: str = typer.Option("table", "--format", help="csv|ndjson|json|table."),
 ) -> None:
     """Pre-flight scan-size estimate (estimate_scan()) — no search job created."""
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
     _validate_format(output_format)
     config: Config = ctx.obj
     client = _client(config)
@@ -392,10 +407,15 @@ def search_estimate(
 def search_count(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query (scope, not a full `| count`)."),
-    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
-    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time (same forms as `search run`). Default: "-15m".',
+    ),
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time (same forms as `search run`). Default: "now".',
+    ),
 ) -> None:
     """Print a single row-count scalar (estimate_count()) — no --format."""
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
     config: Config = ctx.obj
     client = _client(config)
 
@@ -416,8 +436,12 @@ def search_count(
 def schema_cmd(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query to profile."),
-    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
-    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time (same forms as `search run`). Default: "-15m".',
+    ),
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time (same forms as `search run`). Default: "now".',
+    ),
     n: int = typer.Option(50, "--n", help="Sample size, appended as `| limit N`."),
     auto_parsing: str = typer.Option(
         "manual", "--auto-parsing",
@@ -436,6 +460,7 @@ def schema_cmd(
         )
         raise typer.Exit(code=1)
     auto_parsing_mode = _AUTO_PARSING_MODES[key]
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
 
     config: Config = ctx.obj
     client = _client(config)
@@ -457,8 +482,12 @@ def schema_cmd(
 def sample_cmd(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query to sample."),
-    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
-    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time (same forms as `search run`). Default: "-15m".',
+    ),
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time (same forms as `search run`). Default: "now".',
+    ),
     n: int = typer.Option(20, "--n", help="Sample size, appended as `| limit N`."),
     output_format: str | None = typer.Option(
         None, "--format",
@@ -471,6 +500,7 @@ def sample_cmd(
 ) -> None:
     """Run `<query> | limit N` and print the raw sample, via the same rendering path as
     `search run` (no --fields/--max-tokens/--aggregate/--raw/--auto-parsing)."""
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
     if output_format is not None:
         _validate_format(output_format)
 
@@ -615,8 +645,12 @@ def context_unset() -> None:
 def export_cmd(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Sumo Logic search query."),
-    from_time: str = typer.Option(..., "--from", help="Start time (same forms as `search run`)."),
-    to_time: str = typer.Option(..., "--to", help="End time (same forms as `search run`)."),
+    from_time: str | None = typer.Option(
+        None, "--from", help='Start time (same forms as `search run`). Default: "-15m".',
+    ),
+    to_time: str | None = typer.Option(
+        None, "--to", help='End time (same forms as `search run`). Default: "now".',
+    ),
     output_format: str = typer.Option(..., "--format", help="csv|ndjson|json (no table — file output)."),
     out: str = typer.Option(..., "--out", help="Output file path."),
     interval_hours: float | None = typer.Option(
@@ -638,6 +672,7 @@ def export_cmd(
         )
         raise typer.Exit(code=1)
 
+    from_time, to_time = _apply_time_defaults(from_time, to_time)
     config: Config = ctx.obj
     client = _client(config)
 
