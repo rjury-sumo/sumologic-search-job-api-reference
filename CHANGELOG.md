@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-09-17
+
+### Fixed
+
+- `sumosearch` CLI: `search run` and `sample` now render lookup-table reads
+  (`cat /shared/lookups/<table> | ...`) correctly. These hit the messages
+  endpoint but return every row with `_raw` empty and the real data under
+  other map keys (`SearchJobResult.looks_like_lookup_table`, already
+  detected by `sumo_search_client.py`) — the CLI was still projecting them
+  through the fixed raw-message envelope (`_messagetime`, `_sourcecategory`,
+  `_sourcehost`, `_raw`), which produced near-empty rows since none of
+  those fields are populated for a lookup read. They're now projected/
+  rendered like `records`.
+
 ## [0.12.0] - 2026-09-15
 
 ### Changed

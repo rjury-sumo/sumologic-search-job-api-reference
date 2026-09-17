@@ -120,6 +120,16 @@ def messages_result(rows: list[dict], total: int | None = None) -> ssc.SearchJob
     )
 
 
+def lookup_result(rows: list[dict], total: int | None = None) -> ssc.SearchJobResult:
+    """A `cat /shared/lookups/...` read: hits the messages endpoint but every
+    row has `_raw` empty and the real data under other map keys."""
+    items = [{"map": r} for r in rows]
+    return ssc.SearchJobResult(
+        job_id="job-1", result_type="messages", total=total if total is not None else len(items),
+        items=items, looks_like_lookup_table=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fakes for `report` — same shape as make_fake_client/patch_client above,
 # but for SumoDashboardClient.
@@ -225,6 +235,49 @@ def test_search_run_messages_fields_projection(monkeypatch):
     line = jsonlib.loads(out.stdout.strip())
     assert line["tool_name"] == "Bash"
     assert "unwanted" not in line
+
+
+# ---------------------------------------------------------------------------
+# search run — lookup-table path (`cat /shared/lookups/...`)
+# ---------------------------------------------------------------------------
+
+def test_search_run_lookup_table_projects_real_fields_not_raw(monkeypatch):
+    rows = [{"org_name": "acme-demo", "org_id": "42"}]
+    result = lookup_result(rows)
+    client = make_fake_client(run_search=lambda *a, **k: result)
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["search", "run", "cat /shared/lookups/some_table",
+                                   "--from", "-1h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    line = jsonlib.loads(out.stdout.strip())
+    assert line == {"org_name": "acme-demo", "org_id": "42"}
+
+
+def test_search_run_lookup_table_fields_projection(monkeypatch):
+    rows = [{"org_name": "acme-demo", "org_id": "42"}]
+    result = lookup_result(rows)
+    client = make_fake_client(run_search=lambda *a, **k: result)
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["search", "run", "cat /shared/lookups/some_table",
+                                   "--from", "-1h", "--to", "now", "--fields", "org_name"], env=ENV)
+    assert out.exit_code == 0, out.output
+    line = jsonlib.loads(out.stdout.strip())
+    assert line == {"org_name": "acme-demo"}
+
+
+def test_sample_lookup_table_projects_real_fields_not_raw(monkeypatch):
+    rows = [{"org_name": "acme-demo", "org_id": "42"}]
+    result = lookup_result(rows)
+    client = make_fake_client(run_search=lambda *a, **k: result)
+    patch_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["sample", "cat /shared/lookups/some_table",
+                                   "--from", "-1h", "--to", "now"], env=ENV)
+    assert out.exit_code == 0, out.output
+    line = jsonlib.loads(out.stdout.strip())
+    assert line == {"org_name": "acme-demo", "org_id": "42"}
 
 
 # ---------------------------------------------------------------------------

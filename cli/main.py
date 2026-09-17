@@ -341,21 +341,27 @@ def search_run(
         raise typer.Exit(code=1) from exc
 
     is_messages = result.result_type == "messages"
+    # A lookup-table read (`cat /shared/lookups/...`) hits the messages
+    # endpoint but every row has `_raw` empty and the real data under other
+    # map keys — project/render it like `records`, not like raw messages.
+    is_lookup = result.looks_like_lookup_table
     fmt = output_format or ("ndjson" if is_messages else "csv")
 
-    if is_messages:
+    if is_lookup:
+        rows = [item.get("map", {}) for item in result.items]
+    elif is_messages:
         rows = [formats.project_message_row(item, field_list) for item in result.items]
     else:
         rows = [item.get("map", {}) for item in result.items]
 
     def render(subset: list[dict]) -> str:
-        if is_messages:
+        if is_messages and not is_lookup:
             columns = formats.union_columns(subset, None)
         else:
             columns = formats.union_columns(subset, field_list)
             if drop_null_columns:
                 columns = formats.drop_null_columns(subset, columns)
-        return _render_output(result, subset, columns, is_messages, fmt)
+        return _render_output(result, subset, columns, is_messages and not is_lookup, fmt)
 
     dropped = 0
     if max_tokens is not None and is_messages:
@@ -514,9 +520,10 @@ def sample_cmd(
         raise typer.Exit(code=1) from exc
 
     is_messages = result.result_type == "messages"
+    is_lookup = result.looks_like_lookup_table
     fmt = output_format or ("ndjson" if is_messages else "csv")
 
-    if is_messages:
+    if is_messages and not is_lookup:
         rows = [formats.project_message_row(item, None) for item in result.items]
         columns = formats.union_columns(rows, None)
     else:
@@ -525,7 +532,7 @@ def sample_cmd(
         if drop_null_columns:
             columns = formats.drop_null_columns(rows, columns)
 
-    typer.echo(_render_output(result, rows, columns, is_messages, fmt))
+    typer.echo(_render_output(result, rows, columns, is_messages and not is_lookup, fmt))
 
 
 # ---------------------------------------------------------------------------
