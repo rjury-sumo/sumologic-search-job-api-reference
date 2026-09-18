@@ -1468,6 +1468,107 @@ def test_report_describe_queries_flag_default_is_compact_rows(monkeypatch):
     assert "p1" in lines[1] and "A" in lines[1] and "_sourceCategory=* | count" in lines[1]
 
 
+def test_report_describe_sections_flag_default_is_compact_rows(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Ungrouped", "panelType": "SumoSearchPanel", "queries": []},
+        {"id": "sec1", "key": "sec1", "title": "Section One", "panelType": "CollapsiblePanel",
+         "collapsed": False, "collapsiblePanelChildKeys": ["c1"], "queries": []},
+        {"id": "c1", "key": "c1", "title": "Child", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--format", "json"], env=ENV)
+    assert out.exit_code == 0, out.output
+    rows = jsonlib.loads(out.output)
+    assert [(r["title"], r["section"]) for r in rows] == [
+        ("Ungrouped", None), ("Section One", None), ("Child", "Section One"),
+    ]
+
+
+def test_report_describe_sections_flag_full_nests_member_panels(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "sec1", "key": "sec1", "title": "Section One", "panelType": "CollapsiblePanel",
+         "collapsed": False, "collapsiblePanelChildKeys": ["c1"], "queries": []},
+        {"id": "c1", "key": "c1", "title": "Child", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--full"], env=ENV)
+    assert out.exit_code == 0, out.output
+    payload = jsonlib.loads(out.output)
+    assert payload["panels"] == []
+    assert payload["sections"][0]["title"] == "Section One"
+    assert payload["sections"][0]["panels"] == [
+        {"title": "Child", "panelType": "SumoSearchPanel", "x": None, "y": None},
+    ]
+
+
+def test_report_describe_summary_format_list_shows_key_properties(monkeypatch):
+    dashboard = {
+        "id": "dash-1", "title": "My Dashboard", "theme": "Dark",
+        "variables": [{"name": "region", "defaultValue": "us-east-1"}],
+        "panels": [{"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []}],
+    }
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "{" not in out.output  # not JSON
+    assert "title" in out.output and "My Dashboard" in out.output
+    assert "region=us-east-1" in out.output
+    assert "panel_count" in out.output and "1" in out.output
+
+
+def test_report_describe_panels_format_list_shows_title_type_x_y_only(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    lines = [line.split(":", 1)[0].strip() for line in out.output.strip().splitlines()]
+    assert lines == ["title", "panelType", "x", "y"]  # curated columns only
+    assert "Panel One" in out.output and "SumoSearchPanel" in out.output
+
+
+def test_report_describe_sections_format_list_tags_member_rows(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "sec1", "key": "sec1", "title": "Section One", "panelType": "CollapsiblePanel",
+         "collapsed": False, "collapsiblePanelChildKeys": ["c1"], "queries": []},
+        {"id": "c1", "key": "c1", "title": "Child", "panelType": "SumoSearchPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    blocks = out.output.split("\n\n")
+    assert "Section One" in blocks[0] and "section" in blocks[0]
+    assert "Child" in blocks[1] and "Section One" in blocks[1]  # child's "section" is its parent's title
+
+
+def test_report_describe_queries_format_list_groups_queries_under_panel(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": [
+            {"queryKey": "A", "queryType": "Logs", "queryString": "_sourceCategory=* | count"},
+            {"queryKey": "B", "queryType": "Logs", "queryString": "_sourceCategory=* | sum"},
+        ]},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--queries", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert out.output.count("Panel One") == 1  # one block, not one per query
+    assert "A: _sourceCategory=* | count" in out.output
+    assert "B: _sourceCategory=* | sum" in out.output
+
+
 def test_report_describe_not_found_exits_1(monkeypatch):
     def raise_not_found(dashboard_id):
         raise sdc.SumoDashboardError("get dashboard dash-1 failed: HTTP 404 — not found",

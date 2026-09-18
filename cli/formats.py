@@ -24,7 +24,7 @@ import io
 import json
 from typing import Any
 
-VALID_FORMATS = ("csv", "ndjson", "json", "table")
+VALID_FORMATS = ("csv", "ndjson", "json", "table", "list")
 
 # Fixed envelope kept for every `messages` row, regardless of `--fields` —
 # the minimum needed to place a raw log line in context.
@@ -123,6 +123,33 @@ def render_table(rows: list[dict[str, Any]], columns: list[str]) -> str:
     return "\n".join(lines)
 
 
+def render_list(rows: list[dict[str, Any]], columns: list[str]) -> str:
+    """PowerShell 'Format-List' style rendering: one 'Property : Value' block
+    per row, blank line between rows, property names left-padded to align
+    every colon. A value that's a non-empty list of strings (e.g. describe's
+    per-panel `queries` column) prints as an indented bullet block instead of
+    one comma-joined line — joining full query text onto one line would be
+    unreadable."""
+    if not rows:
+        return ""
+    width = max((len(c) for c in columns), default=0)
+    blocks = []
+    for row in rows:
+        lines = []
+        for c in columns:
+            value = row.get(c)
+            label = c.ljust(width)
+            if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+                lines.append(f"{label} :")
+                lines.extend(f"    - {v}" for v in value)
+            elif isinstance(value, list):
+                lines.append(f"{label} : {', '.join(_stringify(v) for v in value)}")
+            else:
+                lines.append(f"{label} : {_stringify(value)}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def render_ndjson(rows: list[dict[str, Any]], columns: list[str] | None = None) -> str:
     """One JSON object per line. `columns=None` (the `messages` case)
     dumps each row's own keys as-is — rows are already the per-row
@@ -145,6 +172,8 @@ def render_by_format(rows: list[dict[str, Any]], columns: list[str] | None, fmt:
         return render_csv(rows, columns or [])
     if fmt == "table":
         return render_table(rows, columns or [])
+    if fmt == "list":
+        return render_list(rows, columns or [])
     if fmt == "ndjson":
         return render_ndjson(rows, columns)
     if fmt == "json":

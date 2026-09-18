@@ -256,6 +256,79 @@ def test_flatten_queries_collapses_multiline_query_to_one_line():
 
 
 # ---------------------------------------------------------------------------
+# describe_dashboard_sections / flatten_sections
+# ---------------------------------------------------------------------------
+
+def test_describe_dashboard_sections_splits_ungrouped_and_sections():
+    result = dd.describe_dashboard_sections(make_dashboard())
+    assert [p["title"] for p in result["panels"]] == ["Errors by region"]
+    assert [s["title"] for s in result["sections"]] == ["Details"]
+
+
+def test_describe_dashboard_sections_minimal_panel_shape():
+    result = dd.describe_dashboard_sections(make_dashboard())
+    assert result["panels"][0] == {
+        "title": "Errors by region", "panelType": "SumoSearchPanel", "x": 0, "y": 0,
+    }
+
+
+def test_describe_dashboard_sections_nests_member_panels():
+    result = dd.describe_dashboard_sections(make_dashboard())
+    section = result["sections"][0]
+    assert section["title"] == "Details"
+    assert section["panelType"] == "CollapsiblePanel"
+    assert (section["x"], section["y"]) == (12, 0)
+    assert section["panels"] == [
+        {"title": "Child panel", "panelType": "SumoSearchPanel", "x": 0, "y": 0},
+    ]
+
+
+def test_flatten_sections_row_order_and_section_tag():
+    rows = dd.flatten_sections(make_dashboard())
+    assert [(r["title"], r["section"]) for r in rows] == [
+        ("Errors by region", None),
+        ("Details", None),
+        ("Child panel", "Details"),
+    ]
+
+
+def test_flatten_sections_row_shape():
+    rows = dd.flatten_sections(make_dashboard())
+    assert rows[0] == {
+        "section": None, "title": "Errors by region", "panelType": "SumoSearchPanel", "x": 0, "y": 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# list_view_summary / list_view_queries — the `--format list` shapes
+# ---------------------------------------------------------------------------
+
+def test_list_view_summary_collapses_variables_and_panel_types():
+    summary = dd.summarize_dashboard(make_dashboard())
+    row = dd.list_view_summary(summary)
+    assert row["title"] == "Test Dashboard"
+    assert row["variables"] == ["region=us-east-1"]
+    assert sorted(row["panel_types"]) == sorted(["SumoSearchPanel: 2", "CollapsiblePanel: 1"])
+    assert row["panel_count"] == 3
+
+
+def test_list_view_queries_groups_by_panel_and_skips_no_query_panels():
+    rows = dd.list_view_queries(make_dashboard())
+    # sec1 has no queries of its own and must not appear
+    assert [r["title"] for r in rows] == ["Errors by region", "Child panel"]
+    panel_a = rows[0]
+    assert (panel_a["panelType"], panel_a["x"], panel_a["y"]) == ("SumoSearchPanel", 0, 0)
+    assert panel_a["queries"] == ["A: _sourceCategory={{region}} | count by _sourceHost"]
+
+
+def test_list_view_queries_collapses_multiline_query_text():
+    dashboard = make_dashboard()
+    dashboard["panels"][0]["queries"][0]["queryString"] = '_sourceCategory=*\n| count by x  '
+    rows = dd.list_view_queries(dashboard)
+    assert rows[0]["queries"] == ["A: _sourceCategory=* | count by x"]
+
+
+# ---------------------------------------------------------------------------
 # _format_time_boundary / _format_time_range
 # ---------------------------------------------------------------------------
 

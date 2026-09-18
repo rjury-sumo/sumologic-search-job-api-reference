@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-09-18
+
+### Added
+
+- `sumosearch` CLI: `report describe --sections` lists panels not in a
+  collapsible section, and each section with its member panels
+  (title/type/x/y only).
+- `sumosearch` CLI: `report describe --format list` — a PowerShell
+  `Format-List`-style human-readable view (key properties only),
+  available at every level (summary, `--panels`, `--sections`,
+  `--queries`). At the `--queries` level, a panel's queries are grouped
+  under one block instead of one row per query.
+
 ## [0.12.1] - 2026-09-17
 
 ### Fixed

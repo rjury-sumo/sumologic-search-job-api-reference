@@ -31,6 +31,12 @@ flatten_queries() -> one row per query: panel_id, panel_key, parent_key,
                       otherwise break csv/table row alignment; --full keeps
                       the exact original text)
 
+describe_dashboard_sections() / flatten_sections() are a separate, reduced
+shape for one narrower question: "what's grouped into a section, and what
+isn't" — title/panelType/x/y only, no id/query/variable detail. Ungrouped
+panels list first, then each section with its member panels nested (--full)
+or following as `section`-tagged rows (compact).
+
 Collapsible sections (panelType 'CollapsiblePanel'): a section's member
 panels are listed by key in its `collapsiblePanelChildKeys`, but each member
 is still a normal top-level entry in `dashboard["panels"]` with its own
@@ -256,6 +262,115 @@ def describe_dashboard_queries(dashboard: dict) -> dict:
 
     _attach(summary["panels"])
     return summary
+
+
+def _minimal_panel_entry(p: dict, layout_map: dict) -> dict:
+    """title/panelType/x/y only — the reduced shape 'sections' output uses instead
+    of _panel_entry()'s full id/query/variable detail."""
+    pos = layout_map.get(p.get("key"), {})
+    return {
+        "title": p.get("title"),
+        "panelType": p.get("panelType"),
+        "x": pos.get("x"),
+        "y": pos.get("y"),
+    }
+
+
+def _section_entry(p: dict, layout_map: dict, panels_by_key: dict, children_by_parent: dict) -> dict:
+    """A CollapsiblePanel section's own title/panelType/x/y plus its member panels
+    (minimal shape, in reading order relative to the section's own origin)."""
+    entry = _minimal_panel_entry(p, layout_map)
+    child_panels = [panels_by_key[k] for k in children_by_parent.get(p.get("key"), []) if k in panels_by_key]
+    entry["panels"] = _sort_reading_order([_minimal_panel_entry(c, layout_map) for c in child_panels])
+    return entry
+
+
+def describe_dashboard_sections(dashboard: dict) -> dict:
+    """Level 'sections': the dashboard split into (a) panels with no enclosing
+    section and (b) each collapsible section with its member panels — title,
+    panelType, and grid position only, no id/query/variable detail. A section's
+    own (x, y) is its position on the dashboard grid; its members' (x, y) are
+    relative to the section's own origin, same caveat as elsewhere in this
+    module (see _panel_entry)."""
+    layout_map = _panel_layout_map(dashboard)
+    child_keys, children_by_parent = _child_key_map(dashboard)
+    panels_by_key = {p.get("key"): p for p in dashboard.get("panels", []) or []}
+
+    ungrouped = []
+    sections = []
+    for p in dashboard.get("panels", []) or []:
+        if p.get("key") in child_keys:
+            continue  # listed under its parent section's "panels" below instead
+        if p.get("panelType") == "CollapsiblePanel":
+            sections.append(_section_entry(p, layout_map, panels_by_key, children_by_parent))
+        else:
+            ungrouped.append(_minimal_panel_entry(p, layout_map))
+
+    return {
+        "panels": _sort_reading_order(ungrouped),
+        "sections": _sort_reading_order(sections),
+    }
+
+
+def flatten_sections(dashboard: dict) -> list[dict]:
+    """Compact 'sections' shape: one flat row per panel. Ungrouped panels come
+    first, then each section's own row followed by its member panels — a member
+    row's `section` is set to its section's title; every other row (ungrouped
+    panels and section rows themselves) gets `section: None`."""
+    summary = describe_dashboard_sections(dashboard)
+    rows: list[dict] = [{"section": None, **p} for p in summary["panels"]]
+    for s in summary["sections"]:
+        rows.append({"section": None, "title": s["title"], "panelType": s["panelType"], "x": s["x"], "y": s["y"]})
+        rows.extend({"section": s["title"], **p} for p in s["panels"])
+    return rows
+
+
+def list_view_summary(summary: dict) -> dict:
+    """Human-readable 'list' format row for the summary level: key scalars
+    plus variables collapsed to 'name=defaultValue' entries and panel type
+    counts collapsed to 'type: count' entries, dropping folderId/layout
+    detail that the raw --full JSON keeps."""
+    variables = [f'{v.get("name")}={v.get("defaultValue")}' for v in summary.get("variables") or []]
+    panel_types = [f"{k}: {v}" for k, v in (summary.get("panel_types") or {}).items()]
+    return {
+        "title": summary.get("title"),
+        "description": summary.get("description"),
+        "domain": summary.get("domain"),
+        "theme": summary.get("theme"),
+        "isPublic": summary.get("isPublic"),
+        "refreshInterval": summary.get("refreshInterval"),
+        "timeRange": summary.get("timeRange"),
+        "variables": variables,
+        "panel_count": summary.get("panel_count"),
+        "panel_types": panel_types,
+    }
+
+
+def list_view_queries(dashboard: dict) -> list[dict]:
+    """Human-readable 'list' format rows for the queries level: one row per
+    panel (flat reading order, matching flatten_panels()) with title/
+    panelType/x/y plus its queries collapsed to 'queryKey: queryString'
+    entries — grouped per panel rather than flatten_queries()'s one-row-
+    per-query shape, since several queries on one panel read as one block
+    more naturally than several near-duplicate rows. Panels with no queries
+    contribute no row, matching flatten_queries()."""
+    panels_by_key = {p.get("key"): p for p in dashboard.get("panels", []) or []}
+    rows: list[dict] = []
+    for panel_row in flatten_panels(dashboard):
+        queries = panels_by_key.get(panel_row["key"], {}).get("queries") or []
+        if not queries:
+            continue
+        rows.append({
+            "title": panel_row["title"],
+            "panelType": panel_row["panelType"],
+            "x": panel_row["x"],
+            "y": panel_row["y"],
+            "queries": [
+                f'{q.get("queryKey")}: {_collapse_whitespace(q.get("queryString") or "")}'
+                for q in queries
+            ],
+        })
+    return rows
 
 
 def flatten_panels(dashboard: dict) -> list[dict]:

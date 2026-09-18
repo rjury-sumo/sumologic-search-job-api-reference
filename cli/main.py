@@ -1060,8 +1060,16 @@ def report_describe(
     queries: bool = typer.Option(
         False, "--queries", help="List each panel's queries (compact rows by default; implies --panels).",
     ),
+    sections: bool = typer.Option(
+        False, "--sections",
+        help="List panels not in a section, and each section with its member panels "
+        "(title/type/x/y only; compact rows by default).",
+    ),
     output_format: str = typer.Option(
-        "table", "--format", help="csv|ndjson|json|table — compact --panels/--queries rows only.",
+        "table", "--format",
+        help="csv|ndjson|json|table|list — list is a human-friendly Format-List-style "
+        "view (key properties only) available at every level, including the default "
+        "summary level.",
     ),
     full: bool = typer.Option(
         False, "--full",
@@ -1077,8 +1085,22 @@ def report_describe(
         typer.echo(f"Report describe failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    if not (panels or queries):
-        typer.echo(json.dumps(dashboard_describe.summarize_dashboard(dashboard), indent=2))
+    if not (panels or queries or sections):
+        if output_format == "list":
+            row = dashboard_describe.list_view_summary(dashboard_describe.summarize_dashboard(dashboard))
+            typer.echo(formats.render_list([row], list(row.keys())))
+        else:
+            typer.echo(json.dumps(dashboard_describe.summarize_dashboard(dashboard), indent=2))
+        return
+
+    if sections:
+        if full:
+            typer.echo(json.dumps(dashboard_describe.describe_dashboard_sections(dashboard), indent=2))
+        elif output_format == "list":
+            rows = dashboard_describe.flatten_sections(dashboard)
+            typer.echo(formats.render_list(rows, ["section", "title", "panelType", "x", "y"]))
+        else:
+            _emit_rows(dashboard_describe.flatten_sections(dashboard), output_format)
         return
 
     if full:
@@ -1087,6 +1109,15 @@ def report_describe(
         else:
             summary = dashboard_describe.describe_dashboard_panels(dashboard)
         typer.echo(json.dumps(summary, indent=2))
+        return
+
+    if output_format == "list":
+        if queries:
+            rows = dashboard_describe.list_view_queries(dashboard)
+            typer.echo(formats.render_list(rows, ["title", "panelType", "x", "y", "queries"]))
+        else:
+            rows = dashboard_describe.flatten_panels(dashboard)
+            typer.echo(formats.render_list(rows, ["title", "panelType", "x", "y"]))
         return
 
     if queries:
