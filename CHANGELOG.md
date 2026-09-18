@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-09-18
+
+### Added
+
+- `sumosearch` CLI: `report describe --format list` now includes ids
+  (dashboard id at the summary level, panel id at the panels/sections/
+  queries levels) and, at the summary level, the titles of every
+  collapsible section.
+
+### Fixed
+
+- `sumosearch` CLI: `report describe --queries --format list` no longer
+  collapses a query's line breaks onto one line. A query with a `//`
+  line comment became invalid when merged that way — everything after
+  the comment on that line was silently commented out. Query text in
+  this format now keeps its original line breaks so it can be copied
+  back out and reused directly.
+
 ## [0.13.0] - 2026-09-18
 
 ### Added

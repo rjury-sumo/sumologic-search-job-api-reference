@@ -304,12 +304,17 @@ def test_flatten_sections_row_shape():
 # ---------------------------------------------------------------------------
 
 def test_list_view_summary_collapses_variables_and_panel_types():
-    summary = dd.summarize_dashboard(make_dashboard())
-    row = dd.list_view_summary(summary)
+    row = dd.list_view_summary(make_dashboard())
+    assert row["id"] == "dash-1"
     assert row["title"] == "Test Dashboard"
     assert row["variables"] == ["region=us-east-1"]
     assert sorted(row["panel_types"]) == sorted(["SumoSearchPanel: 2", "CollapsiblePanel: 1"])
     assert row["panel_count"] == 3
+
+
+def test_list_view_summary_includes_section_titles():
+    row = dd.list_view_summary(make_dashboard())
+    assert row["sections"] == ["Details"]
 
 
 def test_list_view_queries_groups_by_panel_and_skips_no_query_panels():
@@ -317,15 +322,21 @@ def test_list_view_queries_groups_by_panel_and_skips_no_query_panels():
     # sec1 has no queries of its own and must not appear
     assert [r["title"] for r in rows] == ["Errors by region", "Child panel"]
     panel_a = rows[0]
+    assert panel_a["id"] == "panel-a-id"
     assert (panel_a["panelType"], panel_a["x"], panel_a["y"]) == ("SumoSearchPanel", 0, 0)
     assert panel_a["queries"] == ["A: _sourceCategory={{region}} | count by _sourceHost"]
 
 
-def test_list_view_queries_collapses_multiline_query_text():
+def test_list_view_queries_preserves_line_breaks_for_reuse():
+    """Collapsing to one line would break a `//` line comment — the list
+    format keeps the query copy-pasteable, unlike flatten_queries()'s `query`
+    field which deliberately collapses whitespace for csv/table row alignment."""
     dashboard = make_dashboard()
-    dashboard["panels"][0]["queries"][0]["queryString"] = '_sourceCategory=*\n| count by x  '
+    dashboard["panels"][0]["queries"][0]["queryString"] = (
+        '_sourceCategory=*\n// a comment\n| count by x  \n'
+    )
     rows = dd.list_view_queries(dashboard)
-    assert rows[0]["queries"] == ["A: _sourceCategory=* | count by x"]
+    assert rows[0]["queries"] == ["A: _sourceCategory=*\n// a comment\n| count by x"]
 
 
 # ---------------------------------------------------------------------------

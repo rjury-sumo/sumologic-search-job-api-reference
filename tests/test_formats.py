@@ -29,6 +29,12 @@ def test_render_list_string_list_renders_as_bullets():
     assert out == "title   : Panel A\nqueries :\n    - A: count\n    - B: sum"
 
 
+def test_render_list_multiline_bullet_item_keeps_line_breaks():
+    rows = [{"queries": ["A: line1\n// comment\n| line3"]}]
+    out = formats.render_list(rows, ["queries"])
+    assert out == "queries :\n    - A: line1\n      // comment\n      | line3"
+
+
 def test_render_list_empty_list_renders_blank():
     out = formats.render_list([{"queries": []}], ["queries"])
     assert out == "queries : "

@@ -1087,7 +1087,7 @@ def report_describe(
 
     if not (panels or queries or sections):
         if output_format == "list":
-            row = dashboard_describe.list_view_summary(dashboard_describe.summarize_dashboard(dashboard))
+            row = dashboard_describe.list_view_summary(dashboard)
             typer.echo(formats.render_list([row], list(row.keys())))
         else:
             typer.echo(json.dumps(dashboard_describe.summarize_dashboard(dashboard), indent=2))
@@ -1097,8 +1097,8 @@ def report_describe(
         if full:
             typer.echo(json.dumps(dashboard_describe.describe_dashboard_sections(dashboard), indent=2))
         elif output_format == "list":
-            rows = dashboard_describe.flatten_sections(dashboard)
-            typer.echo(formats.render_list(rows, ["section", "title", "panelType", "x", "y"]))
+            rows = dashboard_describe.flatten_sections(dashboard, include_id=True)
+            typer.echo(formats.render_list(rows, ["section", "id", "title", "panelType", "x", "y"]))
         else:
             _emit_rows(dashboard_describe.flatten_sections(dashboard), output_format)
         return
@@ -1114,10 +1114,10 @@ def report_describe(
     if output_format == "list":
         if queries:
             rows = dashboard_describe.list_view_queries(dashboard)
-            typer.echo(formats.render_list(rows, ["title", "panelType", "x", "y", "queries"]))
+            typer.echo(formats.render_list(rows, ["id", "title", "panelType", "x", "y", "queries"]))
         else:
             rows = dashboard_describe.flatten_panels(dashboard)
-            typer.echo(formats.render_list(rows, ["title", "panelType", "x", "y"]))
+            typer.echo(formats.render_list(rows, ["id", "title", "panelType", "x", "y"]))
         return
 
     if queries:

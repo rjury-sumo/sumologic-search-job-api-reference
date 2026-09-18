@@ -1509,7 +1509,11 @@ def test_report_describe_summary_format_list_shows_key_properties(monkeypatch):
     dashboard = {
         "id": "dash-1", "title": "My Dashboard", "theme": "Dark",
         "variables": [{"name": "region", "defaultValue": "us-east-1"}],
-        "panels": [{"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []}],
+        "panels": [
+            {"id": "p1", "key": "p1", "panelType": "SumoSearchPanel", "queries": []},
+            {"id": "sec1", "key": "sec1", "title": "Usage Summary", "panelType": "CollapsiblePanel",
+             "collapsed": False, "collapsiblePanelChildKeys": [], "queries": []},
+        ],
     }
     client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
     patch_dashboard_client(monkeypatch, client)
@@ -1517,9 +1521,11 @@ def test_report_describe_summary_format_list_shows_key_properties(monkeypatch):
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--format", "list"], env=ENV)
     assert out.exit_code == 0, out.output
     assert "{" not in out.output  # not JSON
+    assert "id" in out.output and "dash-1" in out.output
     assert "title" in out.output and "My Dashboard" in out.output
     assert "region=us-east-1" in out.output
-    assert "panel_count" in out.output and "1" in out.output
+    assert "panel_count" in out.output and "2" in out.output
+    assert "sections" in out.output and "Usage Summary" in out.output
 
 
 def test_report_describe_panels_format_list_shows_title_type_x_y_only(monkeypatch):
@@ -1532,8 +1538,8 @@ def test_report_describe_panels_format_list_shows_title_type_x_y_only(monkeypatc
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--panels", "--format", "list"], env=ENV)
     assert out.exit_code == 0, out.output
     lines = [line.split(":", 1)[0].strip() for line in out.output.strip().splitlines()]
-    assert lines == ["title", "panelType", "x", "y"]  # curated columns only
-    assert "Panel One" in out.output and "SumoSearchPanel" in out.output
+    assert lines == ["id", "title", "panelType", "x", "y"]  # curated columns only
+    assert "Panel One" in out.output and "SumoSearchPanel" in out.output and "p1" in out.output
 
 
 def test_report_describe_sections_format_list_tags_member_rows(monkeypatch):
@@ -1548,8 +1554,8 @@ def test_report_describe_sections_format_list_tags_member_rows(monkeypatch):
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--format", "list"], env=ENV)
     assert out.exit_code == 0, out.output
     blocks = out.output.split("\n\n")
-    assert "Section One" in blocks[0] and "section" in blocks[0]
-    assert "Child" in blocks[1] and "Section One" in blocks[1]  # child's "section" is its parent's title
+    assert "Section One" in blocks[0] and "section" in blocks[0] and "sec1" in blocks[0]  # id included
+    assert "Child" in blocks[1] and "Section One" in blocks[1] and "c1" in blocks[1]
 
 
 def test_report_describe_queries_format_list_groups_queries_under_panel(monkeypatch):
@@ -1565,8 +1571,33 @@ def test_report_describe_queries_format_list_groups_queries_under_panel(monkeypa
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--queries", "--format", "list"], env=ENV)
     assert out.exit_code == 0, out.output
     assert out.output.count("Panel One") == 1  # one block, not one per query
+    assert "p1" in out.output  # panel id included
     assert "A: _sourceCategory=* | count" in out.output
     assert "B: _sourceCategory=* | sum" in out.output
+
+
+def test_report_describe_queries_format_list_preserves_line_comments(monkeypatch):
+    """A `//` comment followed by more pipe stages must not get merged onto
+    the comment's line — that would silently comment out the rest of the
+    query, making the copy-pasted text invalid."""
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "p1", "key": "p1", "title": "Panel One", "panelType": "SumoSearchPanel", "queries": [
+            {"queryKey": "A", "queryType": "Logs",
+             "queryString": "_sourceCategory=*\n// strip noisy hosts\n| where host != \"test\""},
+        ]},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--queries", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert "A: _sourceCategory=*" in out.output
+    assert "// strip noisy hosts" in out.output
+    # the pipe stage after the comment must be on its own line, not swallowed by it
+    lines = out.output.splitlines()
+    comment_line = next(i for i, line in enumerate(lines) if "// strip noisy hosts" in line)
+    assert lines[comment_line].strip() == "// strip noisy hosts"
+    assert '| where host != "test"' in lines[comment_line + 1]
 
 
 def test_report_describe_not_found_exits_1(monkeypatch):

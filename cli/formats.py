@@ -129,7 +129,10 @@ def render_list(rows: list[dict[str, Any]], columns: list[str]) -> str:
     every colon. A value that's a non-empty list of strings (e.g. describe's
     per-panel `queries` column) prints as an indented bullet block instead of
     one comma-joined line — joining full query text onto one line would be
-    unreadable."""
+    unreadable. A bullet item that itself contains newlines (multi-line query
+    text — collapsing it would break a `//` line comment, swallowing every
+    pipe stage after it) keeps its line breaks, with continuation lines
+    indented to align under the first line's text rather than the bullet."""
     if not rows:
         return ""
     width = max((len(c) for c in columns), default=0)
@@ -141,7 +144,10 @@ def render_list(rows: list[dict[str, Any]], columns: list[str]) -> str:
             label = c.ljust(width)
             if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
                 lines.append(f"{label} :")
-                lines.extend(f"    - {v}" for v in value)
+                for item in value:
+                    item_lines = item.splitlines() or [""]
+                    lines.append(f"    - {item_lines[0]}")
+                    lines.extend(f"      {item_line}" for item_line in item_lines[1:])
             elif isinstance(value, list):
                 lines.append(f"{label} : {', '.join(_stringify(v) for v in value)}")
             else:
