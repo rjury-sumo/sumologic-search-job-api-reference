@@ -808,6 +808,27 @@ def _emit_rows(rows: list[dict], output_format: str) -> None:
     _warn_if_over_budget(output, no_warn=False)
 
 
+def _render_sections_compact(dashboard: dict) -> str:
+    """`report describe --sections --format list`'s dense view: each section
+    as a one-line header with its member panels indented underneath (name +
+    id only, no type/position) — for scanning which sections exist and
+    what's in them in a narrow terminal, without flatten_sections()'s
+    per-panel property blocks repeating the section name on every row."""
+    summary = dashboard_describe.describe_dashboard_sections(dashboard, include_id=True)
+    sections = summary["sections"]
+    ungrouped = summary["panels"]
+
+    lines = [f"Sections ({len(sections)}):"]
+    for s in sections:
+        lines.append(f"  {s['title']} [{s['id']}]")
+        lines.extend(f"    - {p['title']} [{p['id']}]" for p in s["panels"])
+    if ungrouped:
+        lines.append("")
+        lines.append(f"Ungrouped panels ({len(ungrouped)}):")
+        lines.extend(f"  - {p['title']} [{p['id']}]" for p in ungrouped)
+    return "\n".join(lines)
+
+
 @discover_app.command("partitions")
 def discover_partitions(
     ctx: typer.Context,
@@ -1067,9 +1088,10 @@ def report_describe(
     ),
     output_format: str = typer.Option(
         "table", "--format",
-        help="csv|ndjson|json|table|list — list is a human-friendly Format-List-style "
-        "view (key properties only) available at every level, including the default "
-        "summary level.",
+        help="csv|ndjson|json|table|list — list is a dense human-friendly view (key "
+        "properties only) available at every level, including the default summary "
+        "level; with --sections it groups panels under each section header (name + "
+        "id only) instead of one row per panel.",
     ),
     full: bool = typer.Option(
         False, "--full",
@@ -1097,8 +1119,7 @@ def report_describe(
         if full:
             typer.echo(json.dumps(dashboard_describe.describe_dashboard_sections(dashboard), indent=2))
         elif output_format == "list":
-            rows = dashboard_describe.flatten_sections(dashboard, include_id=True)
-            typer.echo(formats.render_list(rows, ["section", "id", "title", "panelType", "x", "y"]))
+            typer.echo(_render_sections_compact(dashboard))
         else:
             _emit_rows(dashboard_describe.flatten_sections(dashboard), output_format)
         return

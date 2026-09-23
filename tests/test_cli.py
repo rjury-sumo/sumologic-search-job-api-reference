@@ -1542,8 +1542,9 @@ def test_report_describe_panels_format_list_shows_title_type_x_y_only(monkeypatc
     assert "Panel One" in out.output and "SumoSearchPanel" in out.output and "p1" in out.output
 
 
-def test_report_describe_sections_format_list_tags_member_rows(monkeypatch):
+def test_report_describe_sections_format_list_groups_panels_under_section(monkeypatch):
     dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "u1", "key": "u1", "title": "Ungrouped", "panelType": "TextPanel", "queries": []},
         {"id": "sec1", "key": "sec1", "title": "Section One", "panelType": "CollapsiblePanel",
          "collapsed": False, "collapsiblePanelChildKeys": ["c1"], "queries": []},
         {"id": "c1", "key": "c1", "title": "Child", "panelType": "SumoSearchPanel", "queries": []},
@@ -1553,9 +1554,28 @@ def test_report_describe_sections_format_list_tags_member_rows(monkeypatch):
 
     out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--format", "list"], env=ENV)
     assert out.exit_code == 0, out.output
-    blocks = out.output.split("\n\n")
-    assert "Section One" in blocks[0] and "section" in blocks[0] and "sec1" in blocks[0]  # id included
-    assert "Child" in blocks[1] and "Section One" in blocks[1] and "c1" in blocks[1]
+    assert out.output.rstrip("\n") == "\n".join([
+        "Sections (1):",
+        "  Section One [sec1]",
+        "    - Child [c1]",
+        "",
+        "Ungrouped panels (1):",
+        "  - Ungrouped [u1]",
+    ])
+    # dense: no panelType/x/y noise, no repeated section name per panel
+    assert "TextPanel" not in out.output and "SumoSearchPanel" not in out.output
+
+
+def test_report_describe_sections_format_list_no_sections_omits_header(monkeypatch):
+    dashboard = {"id": "dash-1", "title": "My Dashboard", "variables": [], "panels": [
+        {"id": "u1", "key": "u1", "title": "Ungrouped", "panelType": "TextPanel", "queries": []},
+    ]}
+    client = make_fake_dashboard_client(get_dashboard=lambda dashboard_id: dashboard)
+    patch_dashboard_client(monkeypatch, client)
+
+    out = runner.invoke(clim.app, ["report", "describe", "dash-1", "--sections", "--format", "list"], env=ENV)
+    assert out.exit_code == 0, out.output
+    assert out.output.rstrip("\n") == "Sections (0):\n\nUngrouped panels (1):\n  - Ungrouped [u1]"
 
 
 def test_report_describe_queries_format_list_groups_queries_under_panel(monkeypatch):

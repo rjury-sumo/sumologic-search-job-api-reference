@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-09-21
+
+### Changed
+
+- `sumosearch` CLI: `report describe --sections --format list` is now a
+  dense, grouped view — each section printed once as a header with its
+  member panels (name + id only) indented underneath, and ungrouped
+  panels listed separately — instead of one Format-List property block
+  per panel repeating the section name, type, and position on every row.
+
 ## [0.13.1] - 2026-09-18
 
 ### Added

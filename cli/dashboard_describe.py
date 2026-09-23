@@ -321,13 +321,12 @@ def describe_dashboard_sections(dashboard: dict, include_id: bool = False) -> di
     }
 
 
-def flatten_sections(dashboard: dict, include_id: bool = False) -> list[dict]:
+def flatten_sections(dashboard: dict) -> list[dict]:
     """Compact 'sections' shape: one flat row per panel. Ungrouped panels come
     first, then each section's own row followed by its member panels — a member
     row's `section` is set to its section's title; every other row (ungrouped
-    panels and section rows themselves) gets `section: None`. `include_id` is
-    passed through to describe_dashboard_sections() for the 'list' format."""
-    summary = describe_dashboard_sections(dashboard, include_id)
+    panels and section rows themselves) gets `section: None`."""
+    summary = describe_dashboard_sections(dashboard)
     rows: list[dict] = [{"section": None, **p} for p in summary["panels"]]
     for s in summary["sections"]:
         rows.append({"section": None, **{k: v for k, v in s.items() if k != "panels"}})

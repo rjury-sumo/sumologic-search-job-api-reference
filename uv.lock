@@ -416,7 +416,7 @@ wheels = [
 
 [[package]]
 name = "sumologic-search-job-api-reference"
-version = "0.13.1"
+version = "0.13.2"
 source = { editable = "." }
 dependencies = [
     { name = "requests" },
